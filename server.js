@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -26,12 +27,18 @@ app.use((req, res, next) => {
 });
 
 app.post('/api/chat', async (req, res) => {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+
+  if (!apiKey) {
+    return res.status(500).json({ error: 'Server misconfigured: API Key missing.' });
+  }
+
   try {
     const response = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST',
       headers: {
-        'x-api-key': req.headers['x-api-key'],
-        'anthropic-version': req.headers['anthropic-version'],
+        'x-api-key': apiKey,
+        'anthropic-version': req.headers['anthropic-version'] || '2023-06-01',
         'content-type': 'application/json',
       },
       body: JSON.stringify(req.body),
