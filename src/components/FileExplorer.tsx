@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { File, Folder, ChevronRight, ChevronDown } from 'lucide-react';
-import type { FileSystemTree, DirectoryNode, FileNode } from '@webcontainer/api';
+import type { FileSystemTree, DirectoryNode, FileNode, SymlinkNode } from '@webcontainer/api';
 
 interface FileExplorerProps {
   fileTree: FileSystemTree;
@@ -9,7 +9,7 @@ interface FileExplorerProps {
 
 interface FileNodeProps {
   name: string;
-  node: FileNode | DirectoryNode;
+  node: FileNode | DirectoryNode | SymlinkNode;
   path: string;
   depth: number;
   onSelectFile: (path: string, content: string) => void;
@@ -18,11 +18,12 @@ interface FileNodeProps {
 const FileSystemNode: React.FC<FileNodeProps> = ({ name, node, path, depth, onSelectFile }) => {
   const [isOpen, setIsOpen] = useState(true); // Default open for better visibility
   const isDirectory = 'directory' in node;
+  const isSymlink = 'symlink' in node;
 
   const handleClick = () => {
     if (isDirectory) {
       setIsOpen(!isOpen);
-    } else {
+    } else if (!isSymlink) {
       const fileNode = node as FileNode;
       const content = typeof fileNode.file.contents === 'string'
         ? fileNode.file.contents

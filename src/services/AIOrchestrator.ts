@@ -19,8 +19,9 @@ export class AIOrchestrator {
     const userMessage = `User request: ${input}\n\nThe current file structure is:\n${context}`;
 
     try {
-      const responseJson = await this.callLLM(userMessage, systemPrompt);
-      const response: LLMResponse = JSON.parse(responseJson);
+      const rawResponse = await this.callLLM(userMessage, systemPrompt);
+      const cleanJson = this.cleanJsonOutput(rawResponse);
+      const response: LLMResponse = JSON.parse(cleanJson);
 
       const newTree = JSON.parse(JSON.stringify(currentFileTree));
 
@@ -33,6 +34,11 @@ export class AIOrchestrator {
       console.error('Error parsing AI response:', error);
       return null;
     }
+  }
+
+  private static cleanJsonOutput(text: string): string {
+    const match = text.match(/```json([\s\S]*?)```/);
+    return match ? match[1].trim() : text;
   }
 
   private static updateFileInTree(tree: FileSystemTree, filePath: string, newContent: string) {
@@ -67,19 +73,11 @@ export class AIOrchestrator {
   }
 
   static async callLLM(userMessage: string, systemPrompt: string): Promise<string> {
-    const apiKey = localStorage.getItem('anthropic_key');
-
-    if (!apiKey) {
-      console.warn('No Anthropic API key found in localStorage. Please set "anthropic_key".');
-      return JSON.stringify({ modifiedFiles: [] });
-    }
-
     try {
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          'x-api-key': apiKey,
           'anthropic-version': '2023-06-01'
         },
         body: JSON.stringify({
