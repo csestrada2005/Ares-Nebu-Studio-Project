@@ -54,6 +54,7 @@ export function useWebContainer() {
     injectIds(treeClone);
 
     await container.mount(treeClone);
+    await webContainerService.configureShadcn();
     return treeClone;
   };
 
@@ -127,6 +128,7 @@ export function useWebContainer() {
       };
 
       await container.mount(tree);
+      await webContainerService.configureShadcn();
       setIsLoading(false);
       return tree;
 

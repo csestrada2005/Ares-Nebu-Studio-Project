@@ -185,3 +185,86 @@ export const updateCode = (
       return fileContent;
   }
 };
+
+export const updateJSXProp = (
+  fileContent: string,
+  target: TargetElement,
+  propName: string,
+  propValue: string | boolean | number
+): string => {
+  const { tagName, dataOid } = target;
+
+  const plugin = ({ types: t }: any) => ({
+    visitor: {
+      JSXElement(path: any) {
+        const openingElement = path.node.openingElement;
+        const nameNode = openingElement.name;
+
+        if (!t.isJSXIdentifier(nameNode)) return;
+        const name = nameNode.name;
+        if (name !== tagName) return;
+
+        let matchesOid = false;
+        if (dataOid) {
+             const oidAttr = openingElement.attributes.find(
+                (attr: any) => t.isJSXAttribute(attr) && attr.name && attr.name.name === 'data-oid'
+             );
+             if (oidAttr && t.isStringLiteral(oidAttr.value) && oidAttr.value.value === dataOid) {
+                 matchesOid = true;
+             }
+        }
+
+        if (dataOid && !matchesOid) return;
+
+        // If dataOid is NOT provided, fallback to matching first element of type (risky but consistent with updateCode)
+        if (!dataOid) {
+            // Assume match for now if no better ID logic
+            // In practice, inspector should always have dataOid if injected
+        }
+
+        // Find prop
+        const propAttrIndex = openingElement.attributes.findIndex(
+            (attr: any) => t.isJSXAttribute(attr) && attr.name && attr.name.name === propName
+        );
+        const propAttr = propAttrIndex !== -1 ? openingElement.attributes[propAttrIndex] : null;
+
+        let newValueNode;
+        if (typeof propValue === 'string') {
+            newValueNode = t.stringLiteral(propValue);
+        } else if (typeof propValue === 'boolean') {
+             newValueNode = t.jsxExpressionContainer(t.booleanLiteral(propValue));
+        } else if (typeof propValue === 'number') {
+             newValueNode = t.jsxExpressionContainer(t.numericLiteral(propValue));
+        }
+
+        if (propAttr) {
+            propAttr.value = newValueNode;
+        } else {
+            openingElement.attributes.push(
+                t.jsxAttribute(t.jsxIdentifier(propName), newValueNode)
+            );
+        }
+
+        path.stop();
+      }
+    }
+  });
+
+  try {
+      const result = Babel.transform(fileContent, {
+          filename: 'file.tsx',
+          parserOpts: {
+              plugins: ['typescript', 'jsx'],
+              isTSX: true
+          } as any,
+          plugins: [plugin],
+          retainLines: true,
+          compact: false,
+          presets: [],
+      });
+      return result.code || fileContent;
+  } catch (e) {
+      console.error('Babel transform failed in updateJSXProp:', e);
+      return fileContent;
+  }
+};

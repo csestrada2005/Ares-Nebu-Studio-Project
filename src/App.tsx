@@ -12,7 +12,7 @@ import { FileExplorer } from './components/FileExplorer';
 import { AIOrchestrator } from './services/AIOrchestrator';
 import type { FileSystemTree } from '@webcontainer/api';
 import { webContainerService } from './services/WebContainerService';
-import { updateCode, type TargetElement } from './utils/ast';
+import { updateCode, updateJSXProp, type TargetElement } from './utils/ast';
 import JSZip from 'jszip';
 import { Download, Upload, Loader2, LayoutTemplate, Undo, Redo, RefreshCw } from 'lucide-react'; // Added RefreshCw
 import { TEMPLATES } from './templates';
@@ -151,6 +151,24 @@ function App() {
 
     // Update local selection state so the inspector reflects the change immediately
     setSelectedElement(prev => prev ? { ...prev, className: newClassName } : null);
+  };
+
+  const handlePropUpdate = async (name: string, value: string | boolean | number) => {
+    if (!selectedElement) return;
+
+    const code = getFileContent(fileTree, activeFilePath);
+    if (!code) {
+        console.warn(`Could not find active file: ${activeFilePath}`);
+        return;
+    }
+
+    const newCode = updateJSXProp(code, selectedElement, name, value);
+    const newTree = updateFileContent(fileTree, activeFilePath, newCode);
+
+    history.set(newTree);
+    if (container) {
+      await mountFileTree(newTree);
+    }
   };
 
   const handleStyleUpdate = async (newStyles: Record<string, string>) => {
@@ -429,7 +447,11 @@ function App() {
                         onUpdateText={handleTextUpdate}
                     />
                     {editMode === 'visual' && selectedElement && (
-                        <InspectorPanel selectedElement={selectedElement} onUpdateStyle={handleClassUpdate} />
+                        <InspectorPanel
+                            selectedElement={selectedElement}
+                            onUpdateStyle={handleClassUpdate}
+                            onUpdateProp={handlePropUpdate}
+                        />
                     )}
                   </>
                 ) : (
