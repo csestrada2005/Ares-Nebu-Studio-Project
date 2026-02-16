@@ -1,5 +1,6 @@
 import { WebContainer } from '@webcontainer/api';
 import type { FileSystemTree } from '@webcontainer/api';
+import { SHADCN_FILES, SHADCN_DEPENDENCIES } from '../utils/shadcnDefaults';
 
 class WebContainerService {
   private static instance: WebContainerService;
@@ -86,6 +87,62 @@ class WebContainerService {
   public async writeFile(path: string, content: string) {
     if (!this.webContainerInstance) throw new Error('WebContainer not booted');
     await this.webContainerInstance.fs.writeFile(path, content);
+  }
+
+  public async configureShadcn() {
+    if (!this.webContainerInstance) {
+        console.warn('WebContainer not booted, skipping Shadcn config');
+        return;
+    }
+    const fs = this.webContainerInstance.fs;
+
+    // 1. Ensure Shadcn files exist
+    for (const [filePath, fileNode] of Object.entries(SHADCN_FILES)) {
+      try {
+        await fs.readFile(filePath);
+        // File exists, skip
+      } catch (error) {
+        // File does not exist, create it
+        const content = fileNode.file.contents;
+
+        // Ensure directory exists
+        const parts = filePath.split('/');
+        if (parts.length > 1) {
+            const dir = parts.slice(0, -1).join('/');
+            try {
+                await fs.mkdir(dir, { recursive: true });
+            } catch (e) {
+                // ignore
+            }
+        }
+
+        await fs.writeFile(filePath, content);
+        console.log(`[Shadcn] Created missing file: ${filePath}`);
+      }
+    }
+
+    // 2. Ensure package.json has dependencies
+    try {
+      const packageJsonContent = await fs.readFile('package.json', 'utf-8');
+      const packageJson = JSON.parse(packageJsonContent);
+      let modified = false;
+
+      if (!packageJson.dependencies) packageJson.dependencies = {};
+
+      for (const [dep, version] of Object.entries(SHADCN_DEPENDENCIES)) {
+        if (!packageJson.dependencies[dep] && !packageJson.devDependencies?.[dep]) {
+          packageJson.dependencies[dep] = version;
+          modified = true;
+        }
+      }
+
+      if (modified) {
+        await fs.writeFile('package.json', JSON.stringify(packageJson, null, 2));
+        console.log('[Shadcn] Added missing dependencies to package.json');
+      }
+    } catch (error) {
+      console.error('[Shadcn] Failed to update package.json:', error);
+    }
   }
 }
 

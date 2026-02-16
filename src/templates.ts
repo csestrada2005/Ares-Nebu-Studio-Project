@@ -1,4 +1,5 @@
 import type { FileSystemTree } from '@webcontainer/api';
+import { SHADCN_FILES, SHADCN_DEPENDENCIES } from './utils/shadcnDefaults';
 
 const commonFiles = {
   'package.json': {
@@ -17,7 +18,8 @@ const commonFiles = {
         dependencies: {
           react: "^18.3.1",
           "react-dom": "^18.3.1",
-          "lucide-react": "^0.446.0"
+          "lucide-react": "^0.446.0",
+          ...SHADCN_DEPENDENCIES
         },
         devDependencies: {
           "@eslint/js": "^9.9.0",
@@ -66,23 +68,8 @@ export default {
           `
       }
   },
-  'tailwind.config.js': {
-      file: {
-          contents: `
-/** @type {import('tailwindcss').Config} */
-export default {
-  content: [
-    "./index.html",
-    "./src/**/*.{js,ts,jsx,tsx}",
-  ],
-  theme: {
-    extend: {},
-  },
-  plugins: [],
-}
-          `
-      }
-  },
+  'tailwind.config.js': SHADCN_FILES['tailwind.config.js'],
+  'components.json': SHADCN_FILES['components.json'],
   'index.html': {
     file: {
       contents: `
@@ -177,14 +164,11 @@ createRoot(document.getElementById('root')!).render(
       `
     }
   },
-  'index.css': {
-    file: {
-      contents: `
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
-      `
-    }
+  'index.css': SHADCN_FILES['src/index.css'],
+  'lib': {
+      directory: {
+          'utils.ts': SHADCN_FILES['src/lib/utils.ts']
+      }
   },
   'vite-env.d.ts': {
       file: {
