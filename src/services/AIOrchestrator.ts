@@ -1,9 +1,10 @@
 import type { FileSystemTree, DirectoryNode, FileNode } from '@webcontainer/api';
-import { flattenFileTree } from '../utils/context';
+import { generateProjectBlueprint } from '../utils/context';
 import { updateCode } from '../utils/ast';
 import { contextService } from './ContextService';
 import { SupabaseService } from './SupabaseService';
 import { webContainerService } from './WebContainerService';
+import { CodebaseKnowledgeService } from './CodebaseKnowledgeService';
 
 interface ModifiedFile {
   path: string;
@@ -12,9 +13,27 @@ interface ModifiedFile {
 
 interface LLMResponse {
   modifiedFiles: ModifiedFile[];
+  installCommands?: string[];
 }
 
 export class AIOrchestrator {
+  private static currentFileTree: FileSystemTree | null = null;
+  private static lastModifiedFiles: string[] = [];
+  private static retryCount = 0;
+  private static maxRetries = 2;
+  private static isInitialized = false;
+  private static fileUpdateListeners: ((tree: FileSystemTree) => void)[] = [];
+
+  static initialize() {
+    if (this.isInitialized) return;
+    webContainerService.onErrorDetected((error) => this.handleBuildError(error));
+    this.isInitialized = true;
+  }
+
+  static onFilesUpdated(callback: (tree: FileSystemTree) => void) {
+      this.fileUpdateListeners.push(callback);
+  }
+
   static async generatePlan(userGoal: string, currentFileTree: FileSystemTree): Promise<FileSystemTree> {
       const systemPrompt = "You are a Senior Technical Project Manager. Create a detailed implementation plan for the user's request. Output ONLY the content of a PLAN.md file. The format must be a markdown checklist.\n\n" +
       "Example:\n" +
@@ -33,6 +52,10 @@ export class AIOrchestrator {
   }
 
   static async executeNextStep(currentFileTree: FileSystemTree): Promise<FileSystemTree | null> {
+      this.initialize();
+      this.currentFileTree = currentFileTree;
+      this.retryCount = 0;
+
       const planContent = this.getFileContent(currentFileTree, 'PLAN.md');
       if (!planContent) return null;
 
@@ -51,19 +74,56 @@ export class AIOrchestrator {
       if (nextStepIndex === -1) return null; // All done
 
       // Execute the step
-      const context = flattenFileTree(currentFileTree);
+      const knowledgeService = CodebaseKnowledgeService.getInstance();
+      if (!knowledgeService.hasEmbeddings) {
+          await knowledgeService.indexCodebase(currentFileTree);
+      }
+
+      const relevantDocs = await knowledgeService.search(nextStepDescription, 4);
+      const blueprint = generateProjectBlueprint(currentFileTree);
+
+      let relevantContext = "";
+      for (const doc of relevantDocs) {
+          relevantContext += `--- START ${doc.path} ---\n${doc.content}\n--- END ${doc.path} ---\n`;
+      }
+
       const systemPrompt = "You are an expert Senior React Engineer. Implement the following step from the plan. Output a valid JSON object containing a 'modifiedFiles' array. Do not include markdown formatting (```json) or conversational text. JSON only.\n\n" +
       `Task: ${nextStepDescription}\n\n` +
-      "When the user asks for backend features (e.g., 'save this to the database' or 'create a user profile table'):\n" +
-      "1. Generate a valid PostgreSQL CREATE TABLE statement.\n" +
-      "2. Wrap this SQL in a generic file block named supabase/migrations/<timestamp>_create_table.sql.\n" +
-      "3. Do NOT try to execute the SQL directly.\n" +
-      "4. If the user asks to 'Mock' the data, generate a src/data.json file instead of SQL.\n" +
-      "5. Always prefer using the src/services/data abstraction layer when fetching data in React components.\n" +
+      "When the user asks for backend features (e.g., 'save this to the database' or 'create a user profile table'), you must perform a 3-step process:\n" +
+      "1. Generate a valid PostgreSQL CREATE TABLE statement wrapped in a file named `supabase/migrations/<timestamp>_create_<table_name>.sql`.\n" +
+      "2. Update or create `src/integrations/supabase/types.ts` to include the TypeScript interface for the new table.\n" +
+      "   Example for types.ts:\n" +
+      "   export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]\n" +
+      "   export interface Database {\n" +
+      "     public: {\n" +
+      "       Tables: {\n" +
+      "         profiles: {\n" +
+      "           Row: { id: string; created_at: string; username: string | null; }\n" +
+      "           Insert: { id: string; created_at?: string; username?: string | null; }\n" +
+      "           Update: { id?: string; created_at?: string; username?: string | null; }\n" +
+      "         }\n" +
+      "       }\n" +
+      "     }\n" +
+      "   }\n" +
+      "3. Create a custom hook `src/hooks/use<Entity>.ts` that encapsulates the Supabase client logic (select, insert, update, delete) using the generated types.\n" +
+      "   Example for useTodos.ts:\n" +
+      "   import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';\n" +
+      "   import { supabase } from '../integrations/supabase/client';\n" +
+      "   export const useTodos = () => {\n" +
+      "     const queryClient = useQueryClient();\n" +
+      "     const fetchTodos = async () => { const { data, error } = await supabase.from('todos').select('*'); if (error) throw error; return data; };\n" +
+      "     const addTodo = async (todo: any) => { const { data, error } = await supabase.from('todos').insert(todo).select(); if (error) throw error; return data; };\n" +
+      "     return { todos: useQuery({ queryKey: ['todos'], queryFn: fetchTodos }), addTodo: useMutation({ mutationFn: addTodo, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['todos'] }) }) };\n" +
+      "   };\n" +
+      "4. Do NOT try to execute the SQL directly.\n" +
+      "5. If the user asks to 'Mock' the data, generate a src/data.json file instead of SQL.\n" +
       "6. Use the `cn()` utility from `src/lib/utils` for merging Tailwind classes dynamically.\n" +
-      "7. If the user asks for backend logic (e.g., 'handle Stripe payments' or 'Edge Function'), generate a Deno-compatible TypeScript file at `supabase/functions/<name>/index.ts`.";
+      "7. If the user asks for backend logic (e.g., 'handle Stripe payments' or 'Edge Function'), generate a Deno-compatible TypeScript file at `supabase/functions/<name>/index.ts`.\n" +
+      "8. If you need a Shadcn component (e.g., sheet, accordion, dialog) that is not currently in the src/components/ui folder, you MUST include 'npx shadcn-ui@latest add [component-name]' in the 'installCommands' array in your JSON response.";
 
-      const userMessage = `Current File Structure:\n${context}\n\nPlease implement: ${nextStepDescription}`;
+      const userMessage = `PROJECT BLUEPRINT (File Structure):\n${blueprint}\n\n` +
+                          `RELEVANT FILE CONTEXT:\n${relevantContext}\n\n` +
+                          `USER REQUEST:\n${nextStepDescription}`;
 
       try {
           const rawResponse = await this.callLLM(userMessage, systemPrompt);
@@ -72,9 +132,21 @@ export class AIOrchestrator {
 
           const newTree = JSON.parse(JSON.stringify(currentFileTree));
 
+          // Execute install commands if any
+          if (response.installCommands && response.installCommands.length > 0) {
+              for (const cmd of response.installCommands) {
+                  await webContainerService.executeCommand(cmd);
+              }
+          }
+
           // Apply changes
+          const modifiedPaths: string[] = [];
           for (const file of response.modifiedFiles) {
               this.updateFileInTree(newTree, file.path, file.newContent);
+              modifiedPaths.push(file.path);
+              // Update knowledge base
+              await CodebaseKnowledgeService.getInstance().updateFile(file.path, file.newContent);
+
               if (file.path.startsWith('supabase/functions/') && file.path.endsWith('index.ts')) {
                     const parts = file.path.split('/');
                     if (parts.length === 4) {
@@ -90,6 +162,8 @@ export class AIOrchestrator {
           await webContainerService.writeFile('PLAN.md', newPlanContent);
           this.updateFileInTree(newTree, 'PLAN.md', newPlanContent);
 
+          this.lastModifiedFiles = modifiedPaths;
+          this.currentFileTree = newTree;
           return newTree;
 
       } catch (error) {
@@ -103,6 +177,10 @@ export class AIOrchestrator {
     currentFileTree: FileSystemTree,
     selectedElement: { tagName: string; className?: string } | null = null
   ): Promise<FileSystemTree | null> {
+    this.initialize();
+    this.currentFileTree = currentFileTree;
+    this.retryCount = 0;
+
     // Check for "Plan: ..."
     if (input.toLowerCase().startsWith('plan:')) {
         const goal = input.substring(5).trim();
@@ -142,6 +220,7 @@ export class AIOrchestrator {
                     newContent = updateCode(fileContent, selectedElement, { className: data.className });
                 } else if (data.action === 'update-text') {
                      // Cast to any to bypass potential TS error until ast.ts is updated
+                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                      newContent = updateCode(fileContent, selectedElement, { textContent: data.text } as any);
                 }
 
@@ -156,17 +235,51 @@ export class AIOrchestrator {
     }
 
     // Heavy Lane (Original Logic)
-    const context = flattenFileTree(currentFileTree);
+    const knowledgeService = CodebaseKnowledgeService.getInstance();
+    if (!knowledgeService.hasEmbeddings) {
+        await knowledgeService.indexCodebase(currentFileTree);
+    }
+
+    const relevantDocs = await knowledgeService.search(input, 4);
+    const blueprint = generateProjectBlueprint(currentFileTree);
+
+    let relevantContext = "";
+    for (const doc of relevantDocs) {
+        relevantContext += `--- START ${doc.path} ---\n${doc.content}\n--- END ${doc.path} ---\n`;
+    }
 
     const systemPrompt = "You are an expert Senior React Engineer. You must output a valid JSON object containing a 'modifiedFiles' array. Do not include markdown formatting (```json) or conversational text. JSON only.\n\n" +
-    "When the user asks for backend features (e.g., 'save this to the database' or 'create a user profile table'):\n" +
-    "1. Generate a valid PostgreSQL CREATE TABLE statement.\n" +
-    "2. Wrap this SQL in a generic file block named supabase/migrations/<timestamp>_create_table.sql.\n" +
-    "3. Do NOT try to execute the SQL directly.\n" +
-    "4. If the user asks to 'Mock' the data, generate a src/data.json file instead of SQL.\n" +
-    "5. Always prefer using the src/services/data abstraction layer when fetching data in React components.\n" +
+    "When the user asks for backend features (e.g., 'save this to the database' or 'create a user profile table'), you must perform a 3-step process:\n" +
+    "1. Generate a valid PostgreSQL CREATE TABLE statement wrapped in a file named `supabase/migrations/<timestamp>_create_<table_name>.sql`.\n" +
+    "2. Update or create `src/integrations/supabase/types.ts` to include the TypeScript interface for the new table.\n" +
+    "   Example for types.ts:\n" +
+    "   export type Json = string | number | boolean | null | { [key: string]: Json | undefined } | Json[]\n" +
+    "   export interface Database {\n" +
+    "     public: {\n" +
+    "       Tables: {\n" +
+    "         profiles: {\n" +
+    "           Row: { id: string; created_at: string; username: string | null; }\n" +
+    "           Insert: { id: string; created_at?: string; username?: string | null; }\n" +
+    "           Update: { id?: string; created_at?: string; username?: string | null; }\n" +
+    "         }\n" +
+    "       }\n" +
+    "     }\n" +
+    "   }\n" +
+    "3. Create a custom hook `src/hooks/use<Entity>.ts` that encapsulates the Supabase client logic (select, insert, update, delete) using the generated types.\n" +
+    "   Example for useTodos.ts:\n" +
+    "   import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';\n" +
+    "   import { supabase } from '../integrations/supabase/client';\n" +
+    "   export const useTodos = () => {\n" +
+    "     const queryClient = useQueryClient();\n" +
+    "     const fetchTodos = async () => { const { data, error } = await supabase.from('todos').select('*'); if (error) throw error; return data; };\n" +
+    "     const addTodo = async (todo: any) => { const { data, error } = await supabase.from('todos').insert(todo).select(); if (error) throw error; return data; };\n" +
+    "     return { todos: useQuery({ queryKey: ['todos'], queryFn: fetchTodos }), addTodo: useMutation({ mutationFn: addTodo, onSuccess: () => queryClient.invalidateQueries({ queryKey: ['todos'] }) }) };\n" +
+    "   };\n" +
+    "4. Do NOT try to execute the SQL directly.\n" +
+    "5. If the user asks to 'Mock' the data, generate a src/data.json file instead of SQL.\n" +
     "6. Use the `cn()` utility from `src/lib/utils` for merging Tailwind classes dynamically.\n" +
-    "7. If the user asks for backend logic (e.g., 'handle Stripe payments' or 'Edge Function'), generate a Deno-compatible TypeScript file at `supabase/functions/<name>/index.ts`."
+    "7. If the user asks for backend logic (e.g., 'handle Stripe payments' or 'Edge Function'), generate a Deno-compatible TypeScript file at `supabase/functions/<name>/index.ts`.\n" +
+    "8. If you need a Shadcn component (e.g., sheet, accordion, dialog) that is not currently in the src/components/ui folder, you MUST include 'npx shadcn-ui@latest add [component-name]' in the 'installCommands' array in your JSON response.";
 
     let userMessage = "";
 
@@ -185,7 +298,7 @@ export class AIOrchestrator {
             try {
                 const content = await contextService.fetchDocumentation(url);
                 userMessage += `--- START CONTENT FROM ${url} ---\n${content}\n--- END CONTENT FROM ${url} ---\n\n`;
-            } catch (e) {
+            } catch {
                 userMessage += `Failed to fetch ${url}.\n`;
             }
         }
@@ -195,7 +308,9 @@ export class AIOrchestrator {
         userMessage += `CONTEXT: The user has selected this HTML element: <${selectedElement.tagName} className='${selectedElement.className || ''}' />. If their request is ambiguous (e.g., 'change color'), apply it to this element.\n\n`;
     }
 
-    userMessage += `User request: ${input}\n\nThe current file structure is:\n${context}`;
+    userMessage += `PROJECT BLUEPRINT (File Structure):\n${blueprint}\n\n` +
+                   `RELEVANT FILE CONTEXT:\n${relevantContext}\n\n` +
+                   `USER REQUEST:\n${input}`;
 
     try {
       const rawResponse = await this.callLLM(userMessage, systemPrompt);
@@ -212,8 +327,19 @@ export class AIOrchestrator {
 
       const newTree = JSON.parse(JSON.stringify(currentFileTree));
 
+      // Execute install commands if any
+      if (response.installCommands && response.installCommands.length > 0) {
+          for (const cmd of response.installCommands) {
+              await webContainerService.executeCommand(cmd);
+          }
+      }
+
+      const modifiedPaths: string[] = [];
       for (const file of response.modifiedFiles) {
         this.updateFileInTree(newTree, file.path, file.newContent);
+        modifiedPaths.push(file.path);
+        // Update knowledge base
+        await CodebaseKnowledgeService.getInstance().updateFile(file.path, file.newContent);
 
         // Check for Edge Function deployment
         if (file.path.startsWith('supabase/functions/') && file.path.endsWith('index.ts')) {
@@ -226,6 +352,8 @@ export class AIOrchestrator {
         }
       }
 
+      this.lastModifiedFiles = modifiedPaths;
+      this.currentFileTree = newTree;
       return newTree;
     } catch (error) {
       console.error('Error parsing AI response:', error);
@@ -267,6 +395,7 @@ export class AIOrchestrator {
       const part = parts[i];
       if (i === parts.length - 1) {
         // File
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (currentLevel[part] && 'file' in (currentLevel[part] as any)) {
           (currentLevel[part] as FileNode).file.contents = newContent;
         } else {
@@ -279,15 +408,62 @@ export class AIOrchestrator {
         }
       } else {
         // Directory
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         if (currentLevel[part] && 'directory' in (currentLevel[part] as any)) {
           currentLevel = (currentLevel[part] as DirectoryNode).directory;
         } else {
            // Create directory if missing
            currentLevel[part] = { directory: {} };
+           // eslint-disable-next-line @typescript-eslint/no-explicit-any
            currentLevel = (currentLevel[part] as DirectoryNode).directory;
         }
       }
     }
+  }
+
+  private static async handleBuildError(error: string) {
+      if (this.retryCount >= this.maxRetries) {
+          console.warn('[Self-Correction] Max retries reached. Stopping.');
+          return;
+      }
+      if (!this.currentFileTree) return;
+
+      this.retryCount++;
+      console.log(`[Self-Correction] Attempt ${this.retryCount}/${this.maxRetries}`);
+
+      const systemPrompt = "You are an expert React Engineer. You recently modified files and the build failed. " +
+                           "Output a valid JSON object with 'modifiedFiles' to fix the error. JSON only.\n" +
+                           "Error Trace:\n" + error + "\n\n" +
+                           "Recently Modified Files:\n" + this.lastModifiedFiles.join(", ");
+
+      const userMessage = "Fix the build error.";
+
+      try {
+          const rawResponse = await this.callLLM(userMessage, systemPrompt);
+          const cleanJson = this.cleanJsonOutput(rawResponse);
+          const response: LLMResponse = JSON.parse(cleanJson);
+
+          const newTree = JSON.parse(JSON.stringify(this.currentFileTree));
+
+          const modifiedPaths: string[] = [];
+          for (const file of response.modifiedFiles) {
+              this.updateFileInTree(newTree, file.path, file.newContent);
+              modifiedPaths.push(file.path);
+              await webContainerService.writeFile(file.path, file.newContent);
+              await CodebaseKnowledgeService.getInstance().updateFile(file.path, file.newContent);
+          }
+
+          this.lastModifiedFiles = modifiedPaths;
+          this.currentFileTree = newTree;
+
+          // Notify listeners (UI)
+          this.fileUpdateListeners.forEach(cb => cb(newTree));
+
+          console.log('[Self-Correction] Applied fixes.');
+
+      } catch (e) {
+          console.error('[Self-Correction] Failed:', e);
+      }
   }
 
   static async callLLM(userMessage: string, systemPrompt: string): Promise<string> {

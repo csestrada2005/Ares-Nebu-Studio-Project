@@ -33,3 +33,28 @@ export const flattenFileTree = (tree: FileSystemTree): string => {
   const documents = flattenFileTreeRecursive(tree);
   return `<documents>\n${documents}</documents>`;
 };
+
+const generateBlueprintRecursive = (tree: FileSystemTree, depth = 0): string => {
+  let output = '';
+  const indent = '  '.repeat(depth);
+
+  const entries = Object.entries(tree).sort(([a], [b]) => a.localeCompare(b));
+
+  for (const [name, node] of entries) {
+    if (name === 'node_modules' || name === '.git' || name === 'dist' || name === 'package-lock.json' || name === 'yarn.lock' || name === 'pnpm-lock.yaml') {
+      continue;
+    }
+
+    if ('directory' in node) {
+      output += `${indent}${name}/\n`;
+      output += generateBlueprintRecursive((node as DirectoryNode).directory, depth + 1);
+    } else if ('file' in node) {
+      output += `${indent}${name}\n`;
+    }
+  }
+  return output;
+};
+
+export const generateProjectBlueprint = (tree: FileSystemTree): string => {
+  return generateBlueprintRecursive(tree);
+};
