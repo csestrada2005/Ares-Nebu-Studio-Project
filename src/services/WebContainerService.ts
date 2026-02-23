@@ -7,9 +7,18 @@ class WebContainerService {
   private webContainerInstance: WebContainer | null = null;
   private bootPromise: Promise<void> | null = null;
   private env: Record<string, string> = {};
+  private errorListeners: ((error: string) => void)[] = [];
 
   private constructor() {
     // Private constructor to enforce singleton
+  }
+
+  public onErrorDetected(callback: (error: string) => void) {
+      this.errorListeners.push(callback);
+  }
+
+  private notifyError(error: string) {
+      this.errorListeners.forEach(listener => listener(error));
   }
 
   public static getInstance(): WebContainerService {
@@ -79,9 +88,14 @@ class WebContainerService {
     const devProcess = await this.webContainerInstance.spawn('npm', ['run', 'dev'], { env: this.env });
 
     devProcess.output.pipeTo(new WritableStream({
-      write(data) {
+      write: (data) => {
         console.log('[dev server]', data);
         callback?.(data);
+
+        // Simple error detection
+        if (data.includes('ERR_MODULE_NOT_FOUND') || data.includes('Failed to resolve import')) {
+            this.notifyError(data);
+        }
       }
     }));
 
@@ -98,6 +112,26 @@ class WebContainerService {
     await this.webContainerInstance.fs.writeFile(path, content);
   }
 
+  public async executeCommand(cmd: string): Promise<number> {
+    if (!this.webContainerInstance) throw new Error('WebContainer not booted');
+
+    const parts = cmd.split(' ');
+    const command = parts[0];
+    const args = parts.slice(1);
+
+    console.log(`[WebContainer] Executing: ${cmd}`);
+
+    const process = await this.webContainerInstance.spawn(command, args, { env: this.env });
+
+    process.output.pipeTo(new WritableStream({
+      write(data) {
+        console.log(`[${command}]`, data);
+      }
+    }));
+
+    return process.exit;
+  }
+
   public async configureShadcn() {
     if (!this.webContainerInstance) {
         console.warn('WebContainer not booted, skipping Shadcn config');
@@ -110,7 +144,7 @@ class WebContainerService {
       try {
         await fs.readFile(filePath);
         // File exists, skip
-      } catch (error) {
+      } catch {
         // File does not exist, create it
         const content = fileNode.file.contents;
 
@@ -120,7 +154,7 @@ class WebContainerService {
             const dir = parts.slice(0, -1).join('/');
             try {
                 await fs.mkdir(dir, { recursive: true });
-            } catch (e) {
+            } catch {
                 // ignore
             }
         }

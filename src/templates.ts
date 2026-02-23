@@ -18,10 +18,12 @@ const commonFiles = {
         dependencies: {
           react: "^18.3.1",
           "react-dom": "^18.3.1",
+          "react-router-dom": "^6.26.2",
           ...SHADCN_DEPENDENCIES
         },
         devDependencies: {
           "@eslint/js": "^9.9.0",
+          "@types/node": "^22.5.5",
           "@types/react": "^18.3.3",
           "@types/react-dom": "^18.3.0",
           "@vitejs/plugin-react": "^4.3.1",
@@ -44,12 +46,19 @@ const commonFiles = {
       contents: `
 import { defineConfig } from 'vite'
 import react from '@vitejs/plugin-react'
+import path from 'path'
 
 // https://vitejs.dev/config/
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      "@": path.resolve(__dirname, "./src"),
+    },
+  },
   server: {
     host: '0.0.0.0',
+    port: 8080,
   }
 })
       `
@@ -116,7 +125,11 @@ export default {
               "strict": true,
               "noUnusedLocals": true,
               "noUnusedParameters": true,
-              "noFallthroughCasesInSwitch": true
+              "noFallthroughCasesInSwitch": true,
+              "baseUrl": ".",
+              "paths": {
+                "@/*": ["./src/*"]
+              }
             },
             "include": ["src"]
           }, null, 2)
@@ -163,15 +176,181 @@ createRoot(document.getElementById('root')!).render(
       `
     }
   },
+  'App.tsx': {
+    file: {
+      contents: `
+import { BrowserRouter, Routes, Route } from "react-router-dom";
+import Index from "./pages/Index";
+import NotFound from "./pages/NotFound";
+import Layout from "./components/layout/Layout";
+
+function App() {
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route path="/" element={<Layout />}>
+          <Route index element={<Index />} />
+          <Route path="*" element={<NotFound />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  );
+}
+
+export default App;
+      `
+    }
+  },
   'index.css': SHADCN_FILES['src/index.css'],
+  'vite-env.d.ts': {
+      file: {
+          contents: '/// <reference types="vite/client" />'
+      }
+  },
   'lib': {
       directory: {
           'utils.ts': SHADCN_FILES['src/lib/utils.ts']
       }
   },
-  'vite-env.d.ts': {
-      file: {
-          contents: '/// <reference types="vite/client" />'
+  'pages': {
+      directory: {
+          'Index.tsx': {
+              file: {
+                  contents: `
+import React from 'react';
+
+const Index = () => {
+  return (
+    <div className="flex flex-col items-center justify-center min-h-[80vh] text-center">
+      <h1 className="text-4xl font-bold mb-4">Welcome to Your New App</h1>
+      <p className="text-xl text-gray-500 mb-8">
+        This is a starter template with React, Tailwind, and Shadcn UI.
+      </p>
+      <button className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700">
+        Get Started
+      </button>
+    </div>
+  );
+};
+
+export default Index;
+                  `
+              }
+          },
+          'NotFound.tsx': {
+              file: {
+                  contents: `
+import React from "react";
+import { Link } from "react-router-dom";
+
+const NotFound = () => {
+  return (
+    <div className="min-h-screen flex flex-col items-center justify-center bg-gray-100">
+      <div className="text-center">
+        <h1 className="text-4xl font-bold text-gray-900 mb-4">404</h1>
+        <p className="text-xl text-gray-600 mb-4">Oops! Page not found</p>
+        <Link to="/" className="text-blue-500 hover:text-blue-700 underline">
+          Return to Home
+        </Link>
+      </div>
+    </div>
+  );
+};
+
+export default NotFound;
+                  `
+              }
+          }
+      }
+  },
+  'components': {
+      directory: {
+          'ui': {
+              directory: {
+                  '.gitkeep': {
+                      file: { contents: '' }
+                  }
+              }
+          },
+          'layout': {
+              directory: {
+                  'Layout.tsx': {
+                      file: {
+                          contents: `
+import React from 'react';
+import { Outlet } from 'react-router-dom';
+import Header from './Header';
+import Footer from './Footer';
+
+const Layout = () => {
+  return (
+    <div className="flex flex-col min-h-screen">
+      <Header />
+      <main className="flex-grow container mx-auto px-4 py-8">
+        <Outlet />
+      </main>
+      <Footer />
+    </div>
+  );
+};
+
+export default Layout;
+                          `
+                      }
+                  },
+                  'Header.tsx': {
+                      file: {
+                          contents: `
+import React from 'react';
+import { Link } from 'react-router-dom';
+
+const Header = () => {
+  return (
+    <header className="border-b bg-white">
+      <div className="container mx-auto px-4 py-4 flex justify-between items-center">
+        <Link to="/" className="text-xl font-bold">App Name</Link>
+        <nav>
+          <ul className="flex space-x-4">
+            <li><Link to="/" className="hover:underline">Home</Link></li>
+          </ul>
+        </nav>
+      </div>
+    </header>
+  );
+};
+
+export default Header;
+                          `
+                      }
+                  },
+                  'Footer.tsx': {
+                      file: {
+                          contents: `
+import React from 'react';
+
+const Footer = () => {
+  return (
+    <footer className="border-t bg-gray-50 mt-auto">
+      <div className="container mx-auto px-4 py-6 text-center text-sm text-gray-500">
+        © {new Date().getFullYear()} Your Company. All rights reserved.
+      </div>
+    </footer>
+  );
+};
+
+export default Footer;
+                          `
+                      }
+                  }
+              }
+          }
+      }
+  },
+  'hooks': {
+      directory: {
+          '.gitkeep': {
+              file: { contents: '' }
+          }
       }
   }
 };
@@ -181,117 +360,7 @@ export const TEMPLATES: Record<string, FileSystemTree> = {
     ...commonFiles,
     src: {
       directory: {
-        ...commonSrc,
-        'App.tsx': {
-          file: {
-            contents: `
-import React from 'react';
-import { ArrowRight, CheckCircle, Zap, Shield } from 'lucide-react';
-
-function App() {
-  return (
-    <div className="min-h-screen bg-gray-50">
-      <header className="bg-white shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
-          <h1 className="text-2xl font-bold text-red-600">Landify</h1>
-          <nav>
-            <ul className="flex space-x-6 text-gray-600">
-              <li className="hover:text-red-600 cursor-pointer">Features</li>
-              <li className="hover:text-red-600 cursor-pointer">Pricing</li>
-              <li className="hover:text-red-600 cursor-pointer">About</li>
-            </ul>
-          </nav>
-        </div>
-      </header>
-
-      <main>
-        {/* Hero Section */}
-        <div className="bg-white overflow-hidden">
-          <div className="max-w-7xl mx-auto px-4 py-16 sm:px-6 lg:px-8 lg:py-24">
-            <div className="text-center">
-              <h2 className="text-4xl tracking-tight font-extrabold text-gray-900 sm:text-5xl md:text-6xl">
-                <span className="block">Build your next idea</span>
-                <span className="block text-red-600">faster than ever</span>
-              </h2>
-              <p className="mt-4 max-w-md mx-auto text-base text-gray-500 sm:text-lg md:mt-5 md:text-xl md:max-w-3xl">
-                The ultimate starter kit for your next React project. Includes Tailwind CSS, Lucide icons, and a beautiful landing page layout.
-              </p>
-              <div className="mt-5 max-w-md mx-auto sm:flex sm:justify-center md:mt-8">
-                <div className="rounded-md shadow">
-                  <a href="#" className="w-full flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-md text-white bg-red-600 hover:bg-red-700 md:py-4 md:text-lg md:px-10">
-                    Get Started
-                  </a>
-                </div>
-                <div className="mt-3 rounded-md shadow sm:mt-0 sm:ml-3">
-                  <a href="#" className="w-full flex items-center justify-center px-8 py-3 border border-transparent text-base font-medium rounded-md text-red-600 bg-white hover:bg-gray-50 md:py-4 md:text-lg md:px-10">
-                    Learn More
-                  </a>
-                </div>
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Features Section */}
-        <div className="py-12 bg-gray-50">
-          <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-            <div className="lg:text-center">
-              <h2 className="text-base text-red-600 font-semibold tracking-wide uppercase">Features</h2>
-              <p className="mt-2 text-3xl leading-8 font-extrabold tracking-tight text-gray-900 sm:text-4xl">
-                Everything you need
-              </p>
-            </div>
-
-            <div className="mt-10">
-              <dl className="space-y-10 md:space-y-0 md:grid md:grid-cols-3 md:gap-x-8 md:gap-y-10">
-                <div className="relative">
-                  <dt>
-                    <div className="absolute flex items-center justify-center h-12 w-12 rounded-md bg-red-500 text-white">
-                      <Zap className="h-6 w-6" />
-                    </div>
-                    <p className="ml-16 text-lg leading-6 font-medium text-gray-900">Lightning Fast</p>
-                  </dt>
-                  <dd className="mt-2 ml-16 text-base text-gray-500">
-                    Built with Vite for ultra-fast hot module replacement and build times.
-                  </dd>
-                </div>
-
-                <div className="relative">
-                  <dt>
-                    <div className="absolute flex items-center justify-center h-12 w-12 rounded-md bg-red-500 text-white">
-                      <CheckCircle className="h-6 w-6" />
-                    </div>
-                    <p className="ml-16 text-lg leading-6 font-medium text-gray-900">Production Ready</p>
-                  </dt>
-                  <dd className="mt-2 ml-16 text-base text-gray-500">
-                    Optimized for production with best practices and type safety.
-                  </dd>
-                </div>
-
-                <div className="relative">
-                  <dt>
-                    <div className="absolute flex items-center justify-center h-12 w-12 rounded-md bg-red-500 text-white">
-                      <Shield className="h-6 w-6" />
-                    </div>
-                    <p className="ml-16 text-lg leading-6 font-medium text-gray-900">Secure by Design</p>
-                  </dt>
-                  <dd className="mt-2 ml-16 text-base text-gray-500">
-                    Follows security best practices to keep your application safe.
-                  </dd>
-                </div>
-              </dl>
-            </div>
-          </div>
-        </div>
-      </main>
-    </div>
-  );
-}
-
-export default App;
-            `
-          }
-        }
+        ...commonSrc
       }
     }
   },
@@ -299,109 +368,7 @@ export default App;
     ...commonFiles,
     src: {
       directory: {
-        ...commonSrc,
-        'App.tsx': {
-          file: {
-            contents: `
-import React, { useState } from 'react';
-import { Home, BarChart2, Users, Settings, Bell, Search, Menu, User } from 'lucide-react';
-
-function App() {
-  const [sidebarOpen, setSidebarOpen] = useState(false);
-
-  return (
-    <div className="flex h-screen bg-gray-100">
-      {/* Sidebar */}
-      <aside className={\`bg-gray-800 text-white w-64 space-y-6 py-7 px-2 absolute inset-y-0 left-0 transform \${sidebarOpen ? 'translate-x-0' : '-translate-x-full'} md:relative md:translate-x-0 transition duration-200 ease-in-out z-20\`}>
-        <div className="flex items-center space-x-2 px-4">
-          <BarChart2 className="w-8 h-8 text-red-500" />
-          <span className="text-2xl font-extrabold">DashBoard</span>
-        </div>
-
-        <nav className="space-y-1">
-          <a href="#" className="flex items-center space-x-2 py-2.5 px-4 rounded transition duration-200 hover:bg-gray-700 bg-gray-700 text-white">
-            <Home className="w-5 h-5" />
-            <span>Dashboard</span>
-          </a>
-          <a href="#" className="flex items-center space-x-2 py-2.5 px-4 rounded transition duration-200 hover:bg-gray-700 text-gray-400 hover:text-white">
-            <Users className="w-5 h-5" />
-            <span>Users</span>
-          </a>
-          <a href="#" className="flex items-center space-x-2 py-2.5 px-4 rounded transition duration-200 hover:bg-gray-700 text-gray-400 hover:text-white">
-            <BarChart2 className="w-5 h-5" />
-            <span>Analytics</span>
-          </a>
-          <a href="#" className="flex items-center space-x-2 py-2.5 px-4 rounded transition duration-200 hover:bg-gray-700 text-gray-400 hover:text-white">
-            <Settings className="w-5 h-5" />
-            <span>Settings</span>
-          </a>
-        </nav>
-      </aside>
-
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
-        {/* Header */}
-        <header className="flex justify-between items-center py-4 px-6 bg-white shadow-sm">
-          <div className="flex items-center">
-            <button onClick={() => setSidebarOpen(!sidebarOpen)} className="text-gray-500 focus:outline-none md:hidden">
-              <Menu className="w-6 h-6" />
-            </button>
-            <div className="relative mx-4 lg:mx-0 hidden md:block">
-              <span className="absolute inset-y-0 left-0 pl-3 flex items-center">
-                <Search className="h-5 w-5 text-gray-500" />
-              </span>
-              <input className="form-input w-32 sm:w-64 rounded-md pl-10 pr-4 py-2 border border-gray-300 focus:border-red-500" type="text" placeholder="Search" />
-            </div>
-          </div>
-
-          <div className="flex items-center space-x-4">
-            <button className="text-gray-500 hover:text-red-500">
-              <Bell className="w-6 h-6" />
-            </button>
-            <button className="flex items-center space-x-2 text-gray-700 hover:text-red-500">
-              <div className="w-8 h-8 rounded-full bg-gray-300 flex items-center justify-center">
-                <User className="w-5 h-5 text-gray-600" />
-              </div>
-            </button>
-          </div>
-        </header>
-
-        {/* Content Body */}
-        <main className="flex-1 overflow-x-hidden overflow-y-auto bg-gray-100 p-6">
-          <h1 className="text-3xl font-semibold text-gray-800 mb-6">Dashboard Overview</h1>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
-            {[1, 2, 3, 4].map((item) => (
-              <div key={item} className="bg-white rounded-lg shadow-sm p-6">
-                <div className="flex items-center">
-                  <div className="p-3 rounded-full bg-red-100 text-red-500">
-                    <Users className="h-6 w-6" />
-                  </div>
-                  <div className="ml-4">
-                    <p className="mb-2 text-sm font-medium text-gray-600">Total Users</p>
-                    <p className="text-lg font-semibold text-gray-700">1,234</p>
-                  </div>
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="bg-white rounded-lg shadow-sm p-6 h-64">
-             <h3 className="text-lg font-semibold text-gray-700 mb-4">Recent Activity</h3>
-             <div className="border-t border-gray-200 pt-4">
-               <p className="text-gray-500">Graph or list placeholder...</p>
-             </div>
-          </div>
-        </main>
-      </div>
-    </div>
-  );
-}
-
-export default App;
-            `
-          }
-        }
+        ...commonSrc
       }
     }
   }
