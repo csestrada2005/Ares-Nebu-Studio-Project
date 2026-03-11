@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Outlet } from 'react-router-dom';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { AuthProvider } from '@/contexts/AuthContext';
-import { AppSidebar } from '@/components/AppSidebar';
+import AppSidebar from '@/components/AppSidebar';
 import { Topbar } from '@/components/Topbar';
 import { BottomNav } from '@/components/BottomNav';
 
@@ -13,7 +13,7 @@ export function WorkspaceLayout() {
     <LanguageProvider>
       <AuthProvider>
         <div className="flex h-screen w-screen bg-background text-foreground overflow-hidden">
-          <AppSidebar open={sidebarOpen} onOpenChange={setSidebarOpen} />
+          <AppSidebar open={sidebarOpen} onClose={() => setSidebarOpen(false)} />
           <div className="flex flex-col flex-1 overflow-hidden min-w-0">
             <Topbar onMenuClick={() => setSidebarOpen(!sidebarOpen)} />
             <main className="flex-1 overflow-auto">

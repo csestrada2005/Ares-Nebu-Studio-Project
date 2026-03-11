@@ -1,25 +1,24 @@
-import { createContext, useContext, useState, ReactNode } from "react";
+import { createContext, useContext, useState, type ReactNode } from "react";
 
-export type Lang = "es" | "en";
+type Language = "en" | "es";
 
 interface LanguageContextType {
-  lang: Lang;
-  toggleLang: () => void;
+  lang: Language;
+  setLang: (lang: Language) => void;
 }
 
 const LanguageContext = createContext<LanguageContextType>({
-  lang: "es",
-  toggleLang: () => {},
+  lang: "en",
+  setLang: () => {},
 });
 
 export const LanguageProvider = ({ children }: { children: ReactNode }) => {
-  const [lang, setLang] = useState<Lang>("es");
-  const toggleLang = () => setLang((l) => (l === "es" ? "en" : "es"));
+  const [lang, setLang] = useState<Language>("en");
   return (
-    <LanguageContext.Provider value={{ lang, toggleLang }}>
+    <LanguageContext.Provider value={{ lang, setLang }}>
       {children}
     </LanguageContext.Provider>
   );
 };
 
-export const useLanguage = () => useContext(LanguageContext);)}
+export const useLanguage = () => useContext(LanguageContext);

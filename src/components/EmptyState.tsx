@@ -1,37 +1,38 @@
-import { LucideIcon } from "lucide-react";
+import { type ElementType } from "react";
 import { useLanguage } from "@/contexts/LanguageContext";
 
 interface EmptyStateProps {
-  icon: LucideIcon;
-  title: { es: string; en: string };
-  subtitle: { es: string; en: string };
-  ctaLabel?: { es: string; en: string };
+  icon: ElementType;
+  title: Record<"en" | "es", string> | string;
+  subtitle: Record<"en" | "es", string> | string;
+  ctaLabel?: Record<"en" | "es", string> | string;
   onCta?: () => void;
 }
 
 const EmptyState = ({ icon: Icon, title, subtitle, ctaLabel, onCta }: EmptyStateProps) => {
   const { lang } = useLanguage();
+
+  const titleText = typeof title === "string" ? title : title[lang];
+  const subtitleText = typeof subtitle === "string" ? subtitle : subtitle[lang];
+  const ctaText = ctaLabel ? (typeof ctaLabel === "string" ? ctaLabel : ctaLabel[lang]) : undefined;
+
   return (
-    <div className="flex flex-col items-center justify-center py-24 px-4">
-      <div className="w-14 h-14 rounded-2xl flex items-center justify-center mb-5 bg-primary/5 border border-primary/10">
-        <Icon size={26} strokeWidth={1.5} className="text-primary" />
+    <div className="flex flex-col items-center justify-center py-12 px-4 text-center">
+      <div className="w-12 h-12 rounded-full bg-muted flex items-center justify-center mb-4">
+        <Icon className="w-6 h-6 text-muted-foreground" />
       </div>
-      <h3 className="text-base font-semibold mb-1.5 text-foreground">
-        {title[lang]}
-      </h3>
-      <p className="text-sm text-center max-w-xs mb-6 text-muted-foreground">
-        {subtitle[lang]}
-      </p>
-      {ctaLabel && (
+      <h3 className="text-lg font-medium text-foreground mb-2">{titleText}</h3>
+      <p className="text-sm text-muted-foreground max-w-sm mb-6">{subtitleText}</p>
+      {ctaText && onCta && (
         <button
           onClick={onCta}
-          className="flex items-center gap-2 px-5 py-2.5 rounded-lg text-sm font-medium bg-primary text-primary-foreground hover:bg-primary/90 transition-colors"
+          className="px-4 py-2 bg-primary text-primary-foreground rounded-lg text-sm font-medium hover:bg-primary/90 transition-colors"
         >
-          {ctaLabel[lang]}
+          {ctaText}
         </button>
       )}
     </div>
   );
 };
 
-export default EmptyState;)}
+export default EmptyState;

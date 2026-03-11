@@ -2,10 +2,10 @@ import { BrowserRouter, Routes, Route } from 'react-router-dom';
 import { WorkspaceLayout } from './layouts/WorkspaceLayout';
 import { StudioLayout } from './layouts/StudioLayout';
 import { StudioEngine } from './pages/StudioEngine';
-import { DashboardPage } from './pages/DashboardPage';
-import { ContactsPage } from './pages/ContactsPage';
-import { ProjectsPage } from './pages/ProjectsPage';
-import { FinancePage } from './pages/FinancePage';
+import DashboardPage from './pages/DashboardPage';
+import ContactsPage from './pages/ContactsPage';
+import ProjectsPage from './pages/ProjectsPage';
+import FinancePage from './pages/FinancePage';
 
 function App() {
   return (
