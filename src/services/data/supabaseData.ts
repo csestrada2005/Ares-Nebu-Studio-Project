@@ -1,5 +1,5 @@
 import { SupabaseService } from '../SupabaseService';
-import type { Item, Profile, Project, Payment, DashboardKPIs, AdminKPIs } from '../../types';
+import type { Item, Profile, Project, Payment, DashboardKPIs, AdminKPIs, Contact } from '../../types';
 
 const supabase = SupabaseService.getInstance().client;
 
@@ -210,4 +210,84 @@ export const getClientPayments = async (projectIds: string[]): Promise<Payment[]
     return [];
   }
   return (data ?? []) as Payment[];
+};
+
+export const getContacts = async (): Promise<Contact[]> => {
+  const { data, error } = await supabase
+    .from('contacts')
+    .select('*')
+    .order('created_at', { ascending: false });
+
+  if (error) {
+    console.error('Error fetching contacts:', error);
+    return [];
+  }
+  return (data ?? []) as Contact[];
+};
+
+export const getMyContactRecord = async (email: string): Promise<Contact | null> => {
+  const { data, error } = await supabase
+    .from('contacts')
+    .select('*')
+    .eq('email', email)
+    .single();
+
+  if (error) {
+    console.error('Error fetching contact record:', error);
+    return null;
+  }
+  return data as Contact;
+};
+
+export const createContact = async (data: {
+  name: string;
+  email?: string;
+  phone?: string;
+  type: 'lead' | 'client' | 'partner';
+  status?: string;
+}): Promise<Contact | null> => {
+  const { data: { user } } = await supabase.auth.getUser();
+
+  const { data: created, error } = await supabase
+    .from('contacts')
+    .insert({ ...data, user_id: user?.id })
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error creating contact:', error);
+    return null;
+  }
+  return created as Contact;
+};
+
+export const updateContact = async (
+  id: string,
+  data: Partial<Pick<Contact, 'name' | 'email' | 'phone' | 'type' | 'status'>>
+): Promise<Contact | null> => {
+  const { data: updated, error } = await supabase
+    .from('contacts')
+    .update(data)
+    .eq('id', id)
+    .select()
+    .single();
+
+  if (error) {
+    console.error('Error updating contact:', error);
+    return null;
+  }
+  return updated as Contact;
+};
+
+export const deleteContact = async (id: string): Promise<boolean> => {
+  const { error } = await supabase
+    .from('contacts')
+    .delete()
+    .eq('id', id);
+
+  if (error) {
+    console.error('Error deleting contact:', error);
+    return false;
+  }
+  return true;
 };
