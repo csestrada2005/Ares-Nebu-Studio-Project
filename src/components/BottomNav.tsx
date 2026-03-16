@@ -1,5 +1,5 @@
 import { useNavigate, useLocation } from "react-router-dom";
-import { LayoutDashboard, FolderOpen, CreditCard, BarChart3, Bot } from "lucide-react";
+import { LayoutDashboard, FolderOpen, CreditCard, BarChart3, Bot, TrendingUp } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 
 const navItems = [
@@ -20,6 +20,12 @@ const navItems = [
     label: { es: "Pagos", en: "Payments" },
     icon: CreditCard,
     path: "/finance",
+  },
+  {
+    id: "deals",
+    label: { es: "Pipeline", en: "Pipeline" },
+    icon: TrendingUp,
+    path: "/deals",
   },
   {
     id: "metricas",
