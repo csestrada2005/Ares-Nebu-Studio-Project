@@ -78,3 +78,15 @@ export interface Report {
   error_msg: string | null;
   created_at: string;
 }
+
+export interface Deal {
+  id: string;
+  user_id: string;
+  contact_id: string | null;
+  title: string;
+  value: number;
+  stage: 'prospecting' | 'qualification' | 'proposal' | 'negotiation' | 'closed_won' | 'closed_lost';
+  probability: number;
+  expected_close: string | null;
+  created_at: string;
+}

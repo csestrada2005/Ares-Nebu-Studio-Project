@@ -1,5 +1,5 @@
 import { SupabaseService } from '../SupabaseService';
-import type { Item, Profile, Project, Payment, DashboardKPIs, AdminKPIs, Contact, Report } from '../../types';
+import type { Item, Profile, Project, Payment, DashboardKPIs, AdminKPIs, Contact, Report, Deal } from '../../types';
 
 const supabase = SupabaseService.getInstance().client;
 
@@ -643,4 +643,67 @@ export const getReportById = async (id: string): Promise<Report | null> => {
     return null;
   }
   return data as Report;
+};
+
+// ─── Deals ────────────────────────────────────────────────────────────────────
+
+type DealWithContact = Deal & { contacts: { name: string } | null };
+
+export const getDeals = async (
+  page: number = 1,
+  pageSize: number = 20,
+  search: string = ''
+): Promise<{ data: DealWithContact[]; count: number }> => {
+  const offset = (page - 1) * pageSize;
+  let query = supabase
+    .from('deals')
+    .select('*, contacts(name)', { count: 'exact' })
+    .order('created_at', { ascending: false })
+    .range(offset, offset + pageSize - 1);
+
+  if (search) {
+    query = query.ilike('title', `%${search}%`);
+  }
+
+  const { data, error, count } = await query;
+  if (error) { console.error('Error fetching deals:', error); return { data: [], count: 0 }; }
+  return { data: (data ?? []) as DealWithContact[], count: count ?? 0 };
+};
+
+export const createDeal = async (data: {
+  title: string;
+  value: number;
+  stage: Deal['stage'];
+  probability: number;
+  expected_close: string | null;
+  contact_id: string | null;
+}): Promise<DealWithContact | null> => {
+  const { data: { user } } = await supabase.auth.getUser();
+  const { data: created, error } = await supabase
+    .from('deals')
+    .insert({ ...data, user_id: user?.id })
+    .select('*, contacts(name)')
+    .single();
+  if (error) { console.error('Error creating deal:', error); return null; }
+  return created as DealWithContact;
+};
+
+export const updateDeal = async (
+  id: string,
+  data: Partial<Pick<Deal, 'title' | 'value' | 'stage' | 'probability' | 'expected_close'> & { contact_id?: string | null }>
+): Promise<DealWithContact | null> => {
+  const { data: updated, error } = await supabase
+    .from('deals')
+    .update(data)
+    .eq('id', id)
+    .select('*, contacts(name)')
+    .single();
+  if (error) { console.error('Error updating deal:', error); return null; }
+  return updated as DealWithContact;
+};
+
+export const deleteDeal = async (id: string): Promise<boolean> => {
+  const { error } = await supabase.from('deals').delete().eq('id', id);
+  if (error) { console.error('Error deleting deal:', error); return false; }
+  return true;
 };

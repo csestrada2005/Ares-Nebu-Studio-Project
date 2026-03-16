@@ -8,6 +8,7 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
+  TrendingUp,
 } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { useAuth } from "@/contexts/AuthContext";
@@ -18,6 +19,7 @@ export type Page =
   | "dashboard"
   | "proyectos"
   | "pagos"
+  | "deals"
   | "metricas"
   | "ai-studio"
   | "settings";
@@ -51,6 +53,11 @@ const navItems: NavItem[] = [
     icon: CreditCard,
   },
   {
+    id: "deals",
+    label: { es: "Pipeline", en: "Pipeline" },
+    icon: TrendingUp,
+  },
+  {
     id: "metricas",
     label: { es: "Métricas", en: "Metrics" },
     icon: BarChart3,
@@ -79,6 +86,7 @@ const routeMapping: Record<Page, string> = {
   dashboard: "/",
   proyectos: "/projects",
   pagos: "/finance",
+  deals: "/deals",
   metricas: "/metrics",
   "ai-studio": "/ai-studio",
   settings: "/settings",
