@@ -1,7 +1,6 @@
 import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { Bot, Send, Image, Code, MessageSquare, Plus, Settings, Wand2, PanelLeftClose } from "lucide-react";
-import { useNavigate } from "react-router-dom";
 
 type Tab = "chat" | "images" | "builder";
 type Message = { role: 'user' | 'assistant'; content: string };
@@ -13,7 +12,6 @@ const AIStudioPage = () => {
   const [imagePrompt, setImagePrompt] = useState("");
   const [builderPrompt, setBuilderPrompt] = useState("");
   const [showConfig, setShowConfig] = useState(false);
-  const navigate = useNavigate();
 
   // Chat states
   const [messages, setMessages] = useState<Message[]>([]);
