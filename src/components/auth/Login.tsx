@@ -50,7 +50,8 @@ const SumiHeroReveal = () => {
 
   return (
     <div className="relative select-none flex flex-col items-center">
-      <div className="relative inline-block text-center" style={{ fontSize: "clamp(2.4rem, 10vw, 8rem)", lineHeight: 1 }}>
+      {/* Reduced size by ~20% (clamp(1.92rem, 8vw, 6.4rem)) */}
+      <div className="relative inline-block text-center" style={{ fontSize: "clamp(1.92rem, 8vw, 6.4rem)", lineHeight: 1 }}>
         <span className="font-display block text-white/10 tracking-tighter">NEBU STUDIO</span>
         <motion.div
           className="absolute top-0 left-0 h-full w-full overflow-hidden"
@@ -62,8 +63,9 @@ const SumiHeroReveal = () => {
         </motion.div>
       </div>
 
+      {/* Reduce size of red line by setting max-width to 80% of what it was, matching the 80% font size reduction */}
       <div className="w-full flex justify-center -mt-2 sm:-mt-4 z-10">
-        <svg viewBox="0 0 600 22" className="w-[80%] max-w-[720px]">
+        <svg viewBox="0 0 600 22" className="w-[80%] max-w-[576px]">
           <motion.path d={pathMain} stroke="#E60000" strokeWidth="3.8" fill="none" initial={{ pathLength: 0, opacity: 0 }} animate={phase >= 3 ? { pathLength: 1, opacity: 0.8 } : { pathLength: 0, opacity: 0 }} transition={{ duration: 0.6 }} />
           <motion.path d={pathThin} stroke="#E60000" strokeWidth="1.6" fill="none" initial={{ pathLength: 0, opacity: 0 }} animate={phase >= 3 ? { pathLength: 1, opacity: 0.4 } : { pathLength: 0, opacity: 0 }} transition={{ duration: 0.7, delay: 0.1 }} />
         </svg>
@@ -106,7 +108,8 @@ export const Login = () => {
 
       <div className="relative z-10 flex flex-col items-center px-6">
         {/* Asegúrate de colocar la ruta correcta hacia el logo */}
-        <img src="/logo.png" alt="Nebu Studio" className="w-24 sm:w-32 mb-8 opacity-90 drop-shadow-2xl" />
+        {/* Increased size from w-24 sm:w-32 to w-48 sm:w-64 (double) */}
+        <img src="/logo.png" alt="Nebu Studio" className="w-48 sm:w-64 mb-8 opacity-90 drop-shadow-2xl" />
 
         <SumiHeroReveal />
 
