@@ -47,19 +47,19 @@ export const LoadingScreen = ({ onComplete }: { onComplete: () => void }) => {
       <AnimatePresence>{phase === "exiting" && <EnsoCircle key="enso" />}</AnimatePresence>
       <AnimatePresence>
         {phase === "loading" && (
-          <motion.div className="fixed inset-0 z-[250] overflow-hidden bg-[#EBE9E1]" exit={{ opacity: 0 }} transition={{ duration: 0.45 }}>
+          <motion.div className="fixed inset-0 z-[250] overflow-hidden bg-[#0A0A0A]" exit={{ opacity: 0 }} transition={{ duration: 0.45 }}>
             <div className="absolute left-8 sm:left-12 top-1/2 -translate-y-[180%]">
               {RITUAL_LINES.slice(0, visibleCount).map((line, i) => (
                 <motion.div key={i} className="flex items-center gap-3 mb-2" initial={{ opacity: 0, x: -8 }} animate={{ opacity: 1, x: 0 }}>
                   <svg width="5" height="6" viewBox="0 0 5 6" fill="none"><path d="M0 0L5 3L0 6V0Z" fill="hsl(0 90% 44%)" /></svg>
-                  <span className="font-mono text-[10px] sm:text-[11px] tracking-[0.22em] text-black/70">{line.label}</span>
+                  <span className="font-mono text-[10px] sm:text-[11px] tracking-[0.22em] text-white/70">{line.label}</span>
                   <span className="font-mono text-[9px] tracking-[0.18em] text-[#E60000]">/ {line.status}</span>
                 </motion.div>
               ))}
             </div>
             <div className="absolute inset-0 flex flex-col items-center justify-center">
               <span className="font-display text-8xl md:text-[12rem] text-[#E60000] tracking-tighter leading-none">{String(progress).padStart(3, "0")}</span>
-              <div className="mt-8 relative w-48 md:w-64 h-px bg-black/10">
+              <div className="mt-8 relative w-48 md:w-64 h-px bg-white/10">
                 <motion.div className="absolute top-0 left-0 h-full bg-[#E60000]" style={{ width: `${progress}%` }} />
               </div>
             </div>
