@@ -32,6 +32,7 @@ import {
   Activity,
   Menu,
   X,
+  Code,
 } from 'lucide-react';
 import { TEMPLATES } from '../templates';
 import { ProtectedRoute } from '../components/auth/ProtectedRoute';
@@ -41,10 +42,35 @@ import { CommandBubble } from '../components/CommandBubble';
 import { CommandModal } from '../components/CommandModal';
 import { HistoryDrawer } from '../components/HistoryDrawer';
 
-type TabType = 'chat' | 'visual';
+type TabType = 'chat' | 'visual' | 'code';
 
 // Module-level debounce ref for auto-save
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * Ensures a forge_projects row exists for the current session.
+ * Returns the project id (from sessionStorage or a newly created row).
+ */
+async function ensureProject(userId: string): Promise<string | null> {
+  const existing = sessionStorage.getItem('forge_project_id');
+  if (existing) return existing;
+
+  const supabase = SupabaseService.getInstance().client;
+  const name = sessionStorage.getItem('forge_project_name') ?? 'Untitled Project';
+  const { data, error } = await supabase
+    .from('forge_projects')
+    .insert({ user_id: userId, name })
+    .select('id')
+    .single();
+
+  if (error || !data) {
+    console.error('[ensureProject] Failed to create project:', error);
+    return null;
+  }
+
+  sessionStorage.setItem('forge_project_id', data.id);
+  return data.id;
+}
 
 export function StudioEngine() {
   const { container, uploadZip, isLoading: isContainerLoading, installDependency, mountFileTree } = useWebContainer();
@@ -57,7 +83,7 @@ export function StudioEngine() {
   const [showHamburger, setShowHamburger] = useState(false);
   const [selectedElement, setSelectedElement] = useState<TargetElement | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
-  const [editMode, setEditMode] = useState<'interaction' | 'visual' | 'code'>('interaction');
+  const [editMode, setEditMode] = useState<'interaction' | 'visual'>('interaction');
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [selectedFileContent, setSelectedFileContent] = useState<string>('');
   const [activeBottomTab, setActiveBottomTab] = useState<TabType>('chat');
@@ -146,6 +172,10 @@ export function StudioEngine() {
             file_tree: tree,
             trigger,
           });
+          await supabase
+            .from('forge_projects')
+            .update({ updated_at: new Date().toISOString() })
+            .eq('id', projectId);
         } catch (e) {
           console.error('[saveSnapshot] Failed to save snapshot:', e);
         }
@@ -286,13 +316,21 @@ export function StudioEngine() {
     const prompt = sessionStorage.getItem('studio_initial_prompt');
     if (prompt) {
       sessionStorage.removeItem('studio_initial_prompt');
-      // Wait for WebContainer to be ready before sending
-      const timer = setTimeout(() => {
-        if (!isContainerLoading) {
-          handleSendMessage(prompt);
+      const run = async () => {
+        const supabase = SupabaseService.getInstance().client;
+        const { data: { user } } = await supabase.auth.getUser();
+        if (user) {
+          await ensureProject(user.id);
         }
-      }, 3000);
-      return () => clearTimeout(timer);
+        // Wait for WebContainer to be ready before sending
+        const timer = setTimeout(() => {
+          if (!isContainerLoading) {
+            handleSendMessage(prompt);
+          }
+        }, 3000);
+        return () => clearTimeout(timer);
+      };
+      run();
     }
   }, []);
 
@@ -501,6 +539,48 @@ export function StudioEngine() {
     URL.revokeObjectURL(objectUrl);
   };
 
+  // CodePanel component — rendered inside the CommandModal when Code tab is active
+  const CodePanel = () => (
+    <div className="flex w-full h-full bg-gray-950">
+      <div className="w-56 border-r border-gray-800 h-full overflow-hidden shrink-0">
+        <FileExplorer
+          fileTree={fileTree}
+          onSelect={handleFileSelect}
+          onAddPackage={handleInstallPackage}
+        />
+      </div>
+      <div className="flex-1 flex flex-col h-full overflow-hidden">
+        <div className="h-10 border-b border-gray-800 flex items-center justify-between px-4 bg-gray-900 shrink-0">
+          <span className="text-sm text-gray-400 truncate">{selectedFilePath || 'No file selected'}</span>
+          <div className="flex gap-2 shrink-0">
+            <button
+              onClick={() => triggerBuild(true)}
+              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded disabled:opacity-50 flex items-center gap-1"
+              title="Force Reinstall Dependencies"
+            >
+              <RefreshCw size={12} />
+              Reinstall
+            </button>
+            <button
+              onClick={saveAndRun}
+              disabled={!selectedFilePath}
+              className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white text-xs rounded disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Save & Run
+            </button>
+          </div>
+        </div>
+        <textarea
+          value={selectedFileContent}
+          onChange={(e) => handleCodeEdit(e.target.value)}
+          className="flex-1 w-full bg-gray-950 text-gray-300 p-4 font-mono text-sm resize-none focus:outline-none"
+          spellCheck={false}
+          disabled={!selectedFilePath}
+        />
+      </div>
+    </div>
+  );
+
   return (
     <ProtectedRoute>
       <div className="flex flex-col h-screen w-screen bg-gray-950 text-white overflow-hidden">
@@ -605,158 +685,120 @@ export function StudioEngine() {
               )}
             </div>
 
-             {/* Main Content Area */}
-             {editMode === 'code' ? (
-                <div className="flex w-full h-full bg-gray-950">
-                   <div className="w-64 border-r border-gray-800 h-full overflow-hidden">
-                      <FileExplorer
-                          fileTree={fileTree}
-                          onSelect={handleFileSelect}
-                          onAddPackage={handleInstallPackage}
-                      />
-                   </div>
-                   <div className="flex-1 flex flex-col h-full overflow-hidden">
-                      <div className="h-10 border-b border-gray-800 flex items-center justify-between px-4 bg-gray-900 shrink-0">
-                          <span className="text-sm text-gray-400">{selectedFilePath || 'No file selected'}</span>
-                          <div className="flex gap-2">
-                              <button
-                                  onClick={() => triggerBuild(true)}
-                                  className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded disabled:opacity-50 flex items-center gap-1"
-                                  title="Force Reinstall Dependencies"
-                              >
-                                  <RefreshCw size={12} />
-                                  Reinstall
-                              </button>
-                              <button
-                                  onClick={saveAndRun}
-                                  disabled={!selectedFilePath}
-                                  className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white text-xs rounded disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                  Save & Run
-                              </button>
-                          </div>
-                      </div>
-                      <textarea
-                          value={selectedFileContent}
-                          onChange={(e) => handleCodeEdit(e.target.value)}
-                          className="flex-1 w-full bg-gray-950 text-gray-300 p-4 font-mono text-sm resize-none focus:outline-none"
-                          spellCheck={false}
-                          disabled={!selectedFilePath}
-                      />
-                   </div>
-                </div>
+             {/* Main Content Area — preview is always visible */}
+             {isHydrating ? (
+               <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
+                 <Loader2 className="animate-spin w-8 h-8" />
+                 <div>Restoring your project...</div>
+               </div>
+             ) : url ? (
+               <div className="relative w-full h-full">
+                 {/* Canvas Edit Mode Toolbar */}
+                 <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-gray-900 border border-gray-700 rounded-lg flex overflow-hidden shadow-lg">
+                   <button
+                     onClick={() => setEditMode('interaction')}
+                     className={`px-3 py-1.5 text-xs font-medium transition-colors ${editMode === 'interaction' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                   >
+                     Interaction
+                   </button>
+                   <button
+                     onClick={() => setEditMode('visual')}
+                     className={`px-3 py-1.5 text-xs font-medium transition-colors ${editMode === 'visual' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                   >
+                     Visual
+                   </button>
+                   <button
+                     onClick={() => {
+                       setActiveBottomTab('code');
+                       setIsCommandModalOpen(true);
+                     }}
+                     className={`px-3 py-1.5 text-xs font-medium transition-colors flex items-center gap-1 ${activeBottomTab === 'code' && isCommandModalOpen ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
+                   >
+                     <Code size={12} />
+                     Code
+                   </button>
+                 </div>
+                 <iframe
+                   ref={iframeRef}
+                   src={url}
+                   className="w-full h-full border-none"
+                   title="Preview"
+                 />
+                 <PreviewOverlay
+                     iframeRef={iframeRef}
+                     onElementSelect={handleElementSelect}
+                     editMode={editMode}
+                     onUpdateStyle={handleStyleUpdate}
+                     onUpdateText={handleTextUpdate}
+                 />
+                 {editMode === 'visual' && selectedElement && (
+                     <InspectorPanel
+                         selectedElement={selectedElement}
+                         onUpdateStyle={handleClassUpdate}
+                         onUpdateProp={handlePropUpdate}
+                         fileTree={fileTree}
+                     />
+                 )}
+               </div>
              ) : (
-                // Preview Logic
-                isHydrating ? (
-                  <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
-                    <Loader2 className="animate-spin w-8 h-8" />
-                    <div>Restoring your project...</div>
-                  </div>
-                ) : url ? (
-                  <div className="relative w-full h-full">
-                    {/* Canvas Edit Mode Toolbar */}
-                    <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-gray-900 border border-gray-700 rounded-lg flex overflow-hidden shadow-lg">
-                      <button
-                        onClick={() => setEditMode('interaction')}
-                        className={`px-3 py-1.5 text-xs font-medium transition-colors ${editMode === 'interaction' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                      >
-                        Interaction
-                      </button>
-                      <button
-                        onClick={() => setEditMode('visual')}
-                        className={`px-3 py-1.5 text-xs font-medium transition-colors ${editMode === 'visual' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                      >
-                        Visual
-                      </button>
-                      <button
-                        onClick={() => setEditMode('code')}
-                        className={`px-3 py-1.5 text-xs font-medium transition-colors ${editMode === 'code' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                      >
-                        Code
-                      </button>
-                    </div>
-                    <iframe
-                      ref={iframeRef}
-                      src={url}
-                      className="w-full h-full border-none"
-                      title="Preview"
-                    />
-                    <PreviewOverlay
-                        iframeRef={iframeRef}
-                        onElementSelect={handleElementSelect}
-                        editMode={editMode}
-                        onUpdateStyle={handleStyleUpdate}
-                        onUpdateText={handleTextUpdate}
-                    />
-                    {editMode === 'visual' && selectedElement && (
-                        <InspectorPanel
-                            selectedElement={selectedElement}
-                            onUpdateStyle={handleClassUpdate}
-                            onUpdateProp={handlePropUpdate}
-                            fileTree={fileTree}
-                        />
-                    )}
-                  </div>
-                ) : (
-                   <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
-                     {isContainerLoading ? (
-                          <>
-                              <Loader2 className="animate-spin w-8 h-8" />
-                              <div>Initializing WebContainer...</div>
-                          </>
-                     ) : (
-                          showTemplateSelector && Object.keys(fileTree).length === 0 ? (
-                              <div className="flex flex-col items-center gap-6 max-w-2xl w-full px-8">
-                                  <div className="text-center">
-                                      <h2 className="text-2xl font-bold text-gray-300 mb-2">Start a New Project</h2>
-                                      <p className="text-gray-500">Choose a template to get started quickly or upload your own.</p>
-                                  </div>
+                <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
+                  {isContainerLoading ? (
+                       <>
+                           <Loader2 className="animate-spin w-8 h-8" />
+                           <div>Initializing WebContainer...</div>
+                       </>
+                  ) : (
+                       showTemplateSelector && Object.keys(fileTree).length === 0 ? (
+                           <div className="flex flex-col items-center gap-6 max-w-2xl w-full px-8">
+                               <div className="text-center">
+                                   <h2 className="text-2xl font-bold text-gray-300 mb-2">Start a New Project</h2>
+                                   <p className="text-gray-500">Choose a template to get started quickly or upload your own.</p>
+                               </div>
 
-                                  <div className="grid grid-cols-2 gap-4 w-full">
-                                      <button
-                                          onClick={() => handleLoadTemplate('landing-page')}
-                                          className="flex flex-col items-center p-6 bg-gray-800 border-2 border-gray-700 hover:border-red-500 rounded-xl transition-all group text-left"
-                                      >
-                                          <div className="p-3 rounded-full bg-red-900/30 text-red-400 mb-4 group-hover:scale-110 transition-transform">
-                                              <LayoutTemplate className="w-8 h-8" />
-                                          </div>
-                                          <h3 className="text-lg font-semibold text-gray-200 mb-1">Landing Page</h3>
-                                          <p className="text-sm text-gray-500 text-center">Modern hero section with features grid and responsive navbar.</p>
-                                      </button>
+                               <div className="grid grid-cols-2 gap-4 w-full">
+                                   <button
+                                       onClick={() => handleLoadTemplate('landing-page')}
+                                       className="flex flex-col items-center p-6 bg-gray-800 border-2 border-gray-700 hover:border-red-500 rounded-xl transition-all group text-left"
+                                   >
+                                       <div className="p-3 rounded-full bg-red-900/30 text-red-400 mb-4 group-hover:scale-110 transition-transform">
+                                           <LayoutTemplate className="w-8 h-8" />
+                                       </div>
+                                       <h3 className="text-lg font-semibold text-gray-200 mb-1">Landing Page</h3>
+                                       <p className="text-sm text-gray-500 text-center">Modern hero section with features grid and responsive navbar.</p>
+                                   </button>
 
-                                      <button
-                                          onClick={() => handleLoadTemplate('dashboard')}
-                                          className="flex flex-col items-center p-6 bg-gray-800 border-2 border-gray-700 hover:border-red-500 rounded-xl transition-all group text-left"
-                                      >
-                                          <div className="p-3 rounded-full bg-red-900/30 text-red-400 mb-4 group-hover:scale-110 transition-transform">
-                                              <LayoutTemplate className="w-8 h-8" />
-                                          </div>
-                                          <h3 className="text-lg font-semibold text-gray-200 mb-1">Dashboard</h3>
-                                          <p className="text-sm text-gray-500 text-center">Admin layout with sidebar, header, and stats cards.</p>
-                                      </button>
-                                  </div>
+                                   <button
+                                       onClick={() => handleLoadTemplate('dashboard')}
+                                       className="flex flex-col items-center p-6 bg-gray-800 border-2 border-gray-700 hover:border-red-500 rounded-xl transition-all group text-left"
+                                   >
+                                       <div className="p-3 rounded-full bg-red-900/30 text-red-400 mb-4 group-hover:scale-110 transition-transform">
+                                           <LayoutTemplate className="w-8 h-8" />
+                                       </div>
+                                       <h3 className="text-lg font-semibold text-gray-200 mb-1">Dashboard</h3>
+                                       <p className="text-sm text-gray-500 text-center">Admin layout with sidebar, header, and stats cards.</p>
+                                   </button>
+                               </div>
 
-                                  <div className="relative w-full flex items-center gap-4 my-4">
-                                      <div className="h-px bg-gray-800 flex-1"></div>
-                                      <span className="text-xs text-gray-600 uppercase font-medium">Or</span>
-                                      <div className="h-px bg-gray-800 flex-1"></div>
-                                  </div>
+                               <div className="relative w-full flex items-center gap-4 my-4">
+                                   <div className="h-px bg-gray-800 flex-1"></div>
+                                   <span className="text-xs text-gray-600 uppercase font-medium">Or</span>
+                                   <div className="h-px bg-gray-800 flex-1"></div>
+                               </div>
 
-                                  <label className="cursor-pointer text-sm text-gray-400 hover:text-white transition-colors flex items-center gap-2">
-                                      <Upload className="w-4 h-4" />
-                                      Upload a .zip file
-                                      <input type="file" accept=".zip" onChange={handleUploadZip} className="hidden" />
-                                  </label>
-                              </div>
-                          ) : (
-                            <div className="text-center">
-                                <div className="mb-2">Ready to Code</div>
-                                <div className="text-sm">Waiting for server...</div>
-                            </div>
-                          )
-                     )}
-                   </div>
-                )
+                               <label className="cursor-pointer text-sm text-gray-400 hover:text-white transition-colors flex items-center gap-2">
+                                   <Upload className="w-4 h-4" />
+                                   Upload a .zip file
+                                   <input type="file" accept=".zip" onChange={handleUploadZip} className="hidden" />
+                               </label>
+                           </div>
+                       ) : (
+                         <div className="text-center">
+                             <div className="mb-2">Ready to Code</div>
+                             <div className="text-sm">Waiting for server...</div>
+                         </div>
+                       )
+                  )}
+                </div>
              )}
           </div>
         </Panel>
@@ -788,6 +830,9 @@ export function StudioEngine() {
                 </div>
                 {/* Visual tab content is handled entirely inside CommandModal (toggle switch) */}
                 <div className={`w-full h-full ${activeBottomTab === 'visual' ? 'block' : 'hidden'}`} />
+                <div className={`w-full h-full ${activeBottomTab === 'code' ? 'flex' : 'hidden'}`}>
+                    <CodePanel />
+                </div>
              </div>
           </CommandModal>
         )}
