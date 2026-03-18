@@ -60,9 +60,7 @@ const ForgeDashboard = () => {
         .select("id, name")
         .single();
       if (error || !data) throw error;
-      sessionStorage.setItem("forge_project_id", data.id);
-      sessionStorage.setItem("forge_project_name", data.name);
-      navigate("/studio");
+      navigate(`/studio/${data.id}`);
     } catch (e) {
       console.error("[ForgeDashboard] Failed to create project:", e);
     } finally {
@@ -71,9 +69,7 @@ const ForgeDashboard = () => {
   };
 
   const openProject = (project: ForgeProject) => {
-    sessionStorage.setItem("forge_project_id", project.id);
-    sessionStorage.setItem("forge_project_name", project.name);
-    navigate("/studio");
+    navigate(`/studio/${project.id}`);
   };
 
   const deleteProject = async (e: React.MouseEvent, projectId: string) => {
@@ -97,9 +93,24 @@ const ForgeDashboard = () => {
 
   const handleForge = async () => {
     if (!forgeInput.trim()) return;
-    sessionStorage.setItem("studio_initial_prompt", forgeInput.trim());
-    const projectName = forgeInput.trim().slice(0, 60);
-    await createAndOpenProject(projectName);
+    const prompt = forgeInput.trim();
+    const projectName = prompt.slice(0, 60);
+    // Create the project then navigate with the initial prompt in location state
+    if (!user) return;
+    setIsCreating(true);
+    try {
+      const { data, error } = await supabase
+        .from("forge_projects")
+        .insert({ user_id: user.id, name: projectName, description: null })
+        .select("id")
+        .single();
+      if (error || !data) throw error;
+      navigate(`/studio/${data.id}`, { state: { initialPrompt: prompt } });
+    } catch (e) {
+      console.error("[ForgeDashboard] Failed to create project:", e);
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   const formatDate = (iso: string) => {

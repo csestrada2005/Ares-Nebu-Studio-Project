@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Bot, Send, Image, Code, MessageSquare, Plus, Settings, Wand2, PanelLeftClose } from "lucide-react";
 
@@ -7,6 +8,7 @@ type Message = { role: 'user' | 'assistant'; content: string };
 type HistoryEntry = { role: string; content: string };
 
 const AIStudioPage = () => {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [chatInput, setChatInput] = useState("");
   const [imagePrompt, setImagePrompt] = useState("");
@@ -341,8 +343,7 @@ const AIStudioPage = () => {
                   toast.warning('Describe tu sitio antes de continuar');
                   return;
                 }
-                sessionStorage.setItem('studio_initial_prompt', builderPrompt.trim());
-                window.open('/forge', '_blank');
+                navigate('/forge', { state: { initialPrompt: builderPrompt.trim() } });
               }}
               className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground font-medium py-3 rounded-xl transition-colors"
             >

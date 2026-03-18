@@ -36,7 +36,7 @@ function App() {
         {/* AI Web-Builder Studio — full-screen, no business chrome */}
         <Route element={<StudioLayout />}>
           <Route path="forge" element={<ProtectedRoute><ForgeDashboard /></ProtectedRoute>} />
-          <Route path="studio" element={<StudioEngine />} />
+          <Route path="studio/:projectId" element={<StudioEngine />} />
         </Route>
       </Routes>
     </BrowserRouter>

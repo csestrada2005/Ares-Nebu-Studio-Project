@@ -1,38 +1,40 @@
 /**
- * StudioEngine — the full Wyrd Forge AI web-builder IDE.
+ * StudioEngine — Wyrd Forge AI web-builder IDE (Phase 2/3/4 refactor).
  *
- * This component was extracted from src/App.tsx so that it can be mounted
- * under /studio via React Router while keeping the routing entry-point
- * (App.tsx) thin. All original state, hooks, and context wrappers are
- * preserved exactly as they were.
+ * Changes from original:
+ * - WebContainer removed; replaced with BrowserCompiler → srcdoc iframe
+ * - Files stored in Supabase forge_files table, managed via useProjectFiles hook
+ * - Project ID comes from URL params (/studio/:projectId) — no sessionStorage
+ * - isReadOnly mode when user doesn't own the project
+ * - Phase 4 fixes: stale data-oid clear, initial prompt race condition guard
  */
-import { useEffect, useState, useRef } from 'react';
+
+import { useEffect, useState, useRef, useCallback } from 'react';
 import { Panel, Group } from 'react-resizable-panels';
-import { useWebContainer } from '../hooks/useWebContainer';
-import { useHistory } from '../hooks/useHistory';
-import { files } from '../files';
+import { useParams, useLocation, useNavigate } from 'react-router-dom';
+import { useProjectFiles } from '../hooks/useProjectFiles';
 import '../App.css';
 import { ChatInterface } from '../components/ChatInterface';
 import { PreviewOverlay } from '../components/PreviewOverlay';
 import { InspectorPanel } from '../components/InspectorPanel';
 import { FileExplorer } from '../components/FileExplorer';
 import { AIOrchestrator } from '../services/AIOrchestrator';
-import type { FileSystemTree } from '@webcontainer/api';
-import { webContainerService } from '../services/WebContainerService';
 import { SupabaseService } from '../services/SupabaseService';
+import { compile } from '../services/BrowserCompiler';
 import { updateCode, updateJSXProp, type TargetElement } from '../utils/ast';
+import { fileSystemTreeToMap, mapToFileSystemTree } from '../utils/context';
 import JSZip from 'jszip';
 import {
   Download,
   Upload,
   Loader2,
   LayoutTemplate,
-  RefreshCw,
   Settings,
   Activity,
   Menu,
   X,
   Code,
+  Eye,
 } from 'lucide-react';
 import { TEMPLATES } from '../templates';
 import { ProtectedRoute } from '../components/auth/ProtectedRoute';
@@ -44,39 +46,38 @@ import { HistoryDrawer } from '../components/HistoryDrawer';
 
 type TabType = 'chat' | 'visual' | 'code';
 
-// Module-level debounce ref for auto-save
+// Module-level debounce ref for Supabase snapshot saves
 let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
 
-/**
- * Ensures a forge_projects row exists for the current session.
- * Returns the project id (from sessionStorage or a newly created row).
- */
-async function ensureProject(userId: string): Promise<string | null> {
-  const existing = sessionStorage.getItem('forge_project_id');
-  if (existing) return existing;
-
-  const supabase = SupabaseService.getInstance().client;
-  const name = sessionStorage.getItem('forge_project_name') ?? 'Untitled Project';
-  const { data, error } = await supabase
-    .from('forge_projects')
-    .insert({ user_id: userId, name })
-    .select('id')
-    .single();
-
-  if (error || !data) {
-    console.error('[ensureProject] Failed to create project:', error);
-    return null;
-  }
-
-  sessionStorage.setItem('forge_project_id', data.id);
-  return data.id;
-}
+// Active file for AST updates (Inspector) — single-page apps live here
+const ACTIVE_FILE_PATH = 'src/App.tsx';
 
 export function StudioEngine() {
-  const { container, uploadZip, isLoading: isContainerLoading, installDependency, mountFileTree } = useWebContainer();
-  const [url, setUrl] = useState('');
-  const history = useHistory<FileSystemTree>(files);
-  const fileTree = history.state;
+  // -------------------------------------------------------------------------
+  // Routing
+  // -------------------------------------------------------------------------
+  const { projectId } = useParams<{ projectId: string }>();
+  const location = useLocation();
+  const navigate = useNavigate();
+
+  // Initial prompt from ForgeDashboard navigate state (Phase 4 Fix 4)
+  const initialPrompt = (location.state as any)?.initialPrompt as string | undefined;
+  const hasProcessedInitialPrompt = useRef(false);
+
+  // -------------------------------------------------------------------------
+  // File state (replaces WebContainer + FileSystemTree)
+  // -------------------------------------------------------------------------
+  const { files, isLoading, loadFromSupabase, saveFile, deleteFile, updateLocalFile } = useProjectFiles();
+
+  // -------------------------------------------------------------------------
+  // Preview state
+  // -------------------------------------------------------------------------
+  const [compiledHtml, setCompiledHtml] = useState('');
+  const [isCompiling, setIsCompiling] = useState(false);
+
+  // -------------------------------------------------------------------------
+  // UI state
+  // -------------------------------------------------------------------------
   const [showTemplateSelector, setShowTemplateSelector] = useState(true);
   const [showSettings, setShowSettings] = useState(false);
   const [showGraph, setShowGraph] = useState(false);
@@ -89,79 +90,156 @@ export function StudioEngine() {
   const [activeBottomTab, setActiveBottomTab] = useState<TabType>('chat');
   const [isCommandModalOpen, setIsCommandModalOpen] = useState(false);
   const [isHistoryOpen, setIsHistoryOpen] = useState(false);
-  const [isHydrating, setIsHydrating] = useState(false);
+  const [isReadOnly, setIsReadOnly] = useState(false);
 
-  const uploadZipRef = useRef<HTMLInputElement>(null);
-
-  // We keep track of the active file for AST updates (Inspector)
-  // Assuming single-page app or main file is src/App.tsx for now
-  const activeFilePath = 'src/App.tsx';
+  // Phase 4 Fix 2: track whether last file change came from AI
+  const lastChangeSource = useRef<'ai' | 'user'>('user');
 
   const iframeRef = useRef<HTMLIFrameElement>(null);
 
-  // Helper to get content from tree
-  const getFileContent = (tree: FileSystemTree, path: string): string | null => {
-    const parts = path.split('/');
-    let current: any = tree;
-    for (const part of parts) {
-      if (!current) return null;
-      if (current[part]) {
-        current = current[part];
-      } else if (current.directory && current.directory[part]) {
-        current = current.directory[part];
-      } else {
-        return null;
+  // -------------------------------------------------------------------------
+  // Mount: load project files from Supabase
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (!projectId) {
+      navigate('/forge', { replace: true });
+      return;
+    }
+
+    const init = async () => {
+      const supabase = SupabaseService.getInstance().client;
+      const { data: { user } } = await supabase.auth.getUser();
+
+      if (!user) {
+        navigate('/login', { replace: true });
+        return;
       }
-    }
-    if (current && current.file && 'contents' in current.file) {
-      return typeof current.file.contents === 'string'
-        ? current.file.contents
-        : new TextDecoder().decode(current.file.contents);
-    }
-    return null;
-  };
 
-  // Helper to update content in tree
-  const updateFileContent = (tree: FileSystemTree, path: string, content: string): FileSystemTree => {
-    const newTree = JSON.parse(JSON.stringify(tree));
-    const parts = path.split('/');
-    let current: any = newTree;
+      // Check project ownership / access
+      const { data: project } = await supabase
+        .from('forge_projects')
+        .select('id, user_id')
+        .eq('id', projectId)
+        .single();
 
-    for (let i = 0; i < parts.length; i++) {
-      const part = parts[i];
-      if (i === parts.length - 1) {
-        if (current[part] && 'file' in current[part]) {
-           current[part].file.contents = content;
-        } else {
-             current[part] = { file: { contents: content } };
+      if (!project) {
+        // Check public access
+        const { data: access } = await supabase
+          .from('forge_project_access')
+          .select('is_public')
+          .eq('project_id', projectId)
+          .single();
+
+        if (!access?.is_public) {
+          navigate('/forge', { replace: true });
+          return;
         }
-      } else {
-        if (current[part]) {
-             if ('directory' in current[part]) {
-                 current = current[part].directory;
-             } else {
-                 return newTree;
-             }
-        } else if (current.directory && current.directory[part]) {
-            current = current.directory[part];
-        } else {
-             current[part] = { directory: {} };
-             current = current[part].directory;
+        setIsReadOnly(true);
+      } else if (project.user_id !== user.id) {
+        // Another user's project — check if public
+        const { data: access } = await supabase
+          .from('forge_project_access')
+          .select('is_public')
+          .eq('project_id', projectId)
+          .single();
+
+        if (!access?.is_public) {
+          navigate('/forge', { replace: true });
+          return;
         }
+        setIsReadOnly(true);
       }
-    }
-    return newTree;
-  };
 
-  // Save snapshot to Supabase
-  const saveSnapshot = async (tree: FileSystemTree, trigger: string, label?: string) => {
+      await loadFromSupabase(projectId);
+    };
+
+    init().catch(console.error);
+  }, [projectId]);
+
+  // -------------------------------------------------------------------------
+  // AI callback registration
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    AIOrchestrator.setFileUpdateCallback((path, content) => {
+      lastChangeSource.current = 'ai';
+      updateLocalFile(path, content);
+      // Async save — don't await to keep the callback synchronous
+      saveFile(path, content).catch(console.error);
+    });
+  }, [updateLocalFile, saveFile]);
+
+  // -------------------------------------------------------------------------
+  // Debounced compilation whenever files change
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (files.size === 0) return;
+
+    const timer = setTimeout(async () => {
+      setIsCompiling(true);
+      try {
+        const html = await compile(files);
+        setCompiledHtml(html);
+        setShowTemplateSelector(false);
+      } catch (e: any) {
+        console.error('[StudioEngine] Compile error:', e);
+      } finally {
+        setIsCompiling(false);
+      }
+    }, 300);
+
+    return () => clearTimeout(timer);
+  }, [files]);
+
+  // -------------------------------------------------------------------------
+  // Phase 4 Fix 4: run initialPrompt only after files have loaded
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (!isLoading && !hasProcessedInitialPrompt.current && initialPrompt && files.size > 0) {
+      hasProcessedInitialPrompt.current = true;
+      handleSendMessage(initialPrompt);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLoading]);
+
+  // -------------------------------------------------------------------------
+  // Phase 4 Fix 2: clear stale element selection after AI modifies App.tsx
+  // -------------------------------------------------------------------------
+  const prevAppContent = useRef<string | null>(null);
+  useEffect(() => {
+    const appContent = files.get(ACTIVE_FILE_PATH) ?? null;
+    if (
+      appContent !== null &&
+      appContent !== prevAppContent.current &&
+      lastChangeSource.current === 'ai'
+    ) {
+      iframeRef.current?.contentWindow?.postMessage({ type: 'clear-selection' }, '*');
+      setSelectedElement(null);
+    }
+    prevAppContent.current = appContent;
+  }, [files]);
+
+  // -------------------------------------------------------------------------
+  // Keyboard shortcuts (Ctrl+Z / Ctrl+Y handled by browser native undo in textarea)
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Future: wire undo/redo to file history here
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // -------------------------------------------------------------------------
+  // Snapshot save to forge_snapshots (for HistoryDrawer)
+  // -------------------------------------------------------------------------
+  const saveSnapshot = useCallback(async (trigger: string, label?: string) => {
+    if (!projectId) return;
     try {
-      const projectId = sessionStorage.getItem('forge_project_id');
-      if (!projectId) return;
-
       const supabase = SupabaseService.getInstance().client;
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) return;
+
+      const fileTree = mapToFileSystemTree(files);
 
       const doSave = async () => {
         try {
@@ -169,7 +247,7 @@ export function StudioEngine() {
             project_id: projectId,
             user_id: user.id,
             label: label ?? null,
-            file_tree: tree,
+            file_tree: fileTree,
             trigger,
           });
           await supabase
@@ -177,7 +255,7 @@ export function StudioEngine() {
             .update({ updated_at: new Date().toISOString() })
             .eq('id', projectId);
         } catch (e) {
-          console.error('[saveSnapshot] Failed to save snapshot:', e);
+          console.error('[saveSnapshot] Failed:', e);
         }
       };
 
@@ -190,12 +268,32 @@ export function StudioEngine() {
     } catch (e) {
       console.error('[saveSnapshot] Error:', e);
     }
+  }, [projectId, files]);
+
+  // -------------------------------------------------------------------------
+  // Template loader
+  // -------------------------------------------------------------------------
+  const handleLoadTemplate = async (templateKey: string) => {
+    const template = TEMPLATES[templateKey];
+    if (!template) return;
+
+    setShowTemplateSelector(false);
+    const flatFiles = fileSystemTreeToMap(template);
+
+    for (const [path, content] of flatFiles) {
+      updateLocalFile(path, content);
+      await saveFile(path, content);
+    }
+
+    await saveSnapshot('template_load');
   };
 
+  // -------------------------------------------------------------------------
+  // Code editor handlers
+  // -------------------------------------------------------------------------
   const handleFileSelect = (path: string) => {
     setSelectedFilePath(path);
-    const content = getFileContent(fileTree, path);
-    setSelectedFileContent(content || '');
+    setSelectedFileContent(files.get(path) || '');
   };
 
   const handleCodeEdit = (newContent: string) => {
@@ -204,330 +302,98 @@ export function StudioEngine() {
 
   const saveAndRun = async () => {
     if (!selectedFilePath) return;
-    const newTree = updateFileContent(fileTree, selectedFilePath, selectedFileContent);
-    history.set(newTree);
-    if (container) {
-      await mountFileTree(newTree);
-      await saveSnapshot(newTree, 'manual_save');
-    }
+    lastChangeSource.current = 'user';
+    updateLocalFile(selectedFilePath, selectedFileContent);
+    await saveFile(selectedFilePath, selectedFileContent);
   };
 
-  const handleElementSelect = (element: { tagName: string; className?: string; innerText?: string; hasChildren?: boolean; dataOid?: string }) => {
+  // -------------------------------------------------------------------------
+  // Visual editing handlers
+  // -------------------------------------------------------------------------
+  const handleElementSelect = (element: TargetElement) => {
     setSelectedElement(element);
   };
 
   const handleTextUpdate = async (newText: string) => {
     if (!selectedElement) return;
+    const code = files.get(ACTIVE_FILE_PATH);
+    if (!code) return;
 
-    const code = getFileContent(fileTree, activeFilePath);
-    if (!code) {
-        console.warn(`Could not find active file: ${activeFilePath}`);
-        return;
-    }
-
+    lastChangeSource.current = 'user';
     const newCode = updateCode(code, selectedElement, { textContent: newText });
-    const newTree = updateFileContent(fileTree, activeFilePath, newCode);
-
-    history.set(newTree);
-    if (container) {
-      await mountFileTree(newTree);
-    }
+    updateLocalFile(ACTIVE_FILE_PATH, newCode);
+    await saveFile(ACTIVE_FILE_PATH, newCode);
   };
 
   const handleClassUpdate = async (newClassName: string) => {
     if (!selectedElement) return;
+    const code = files.get(ACTIVE_FILE_PATH);
+    if (!code) return;
 
-    const code = getFileContent(fileTree, activeFilePath);
-    if (!code) {
-        console.warn(`Could not find active file: ${activeFilePath}`);
-        return;
-    }
-
+    lastChangeSource.current = 'user';
     const newCode = updateCode(code, selectedElement, { className: newClassName }, { classNameMode: 'replace' });
-    const newTree = updateFileContent(fileTree, activeFilePath, newCode);
+    updateLocalFile(ACTIVE_FILE_PATH, newCode);
+    await saveFile(ACTIVE_FILE_PATH, newCode);
 
-    history.set(newTree);
-    if (container) {
-      await mountFileTree(newTree);
-    }
-
-    // Update local selection state so the inspector reflects the change immediately
     setSelectedElement(prev => prev ? { ...prev, className: newClassName } : null);
   };
 
   const handlePropUpdate = async (name: string, value: string | boolean | number) => {
     if (!selectedElement) return;
+    const code = files.get(ACTIVE_FILE_PATH);
+    if (!code) return;
 
-    const code = getFileContent(fileTree, activeFilePath);
-    if (!code) {
-        console.warn(`Could not find active file: ${activeFilePath}`);
-        return;
-    }
-
+    lastChangeSource.current = 'user';
     const newCode = updateJSXProp(code, selectedElement, name, value);
-    const newTree = updateFileContent(fileTree, activeFilePath, newCode);
-
-    history.set(newTree);
-    if (container) {
-      await mountFileTree(newTree);
-    }
+    updateLocalFile(ACTIVE_FILE_PATH, newCode);
+    await saveFile(ACTIVE_FILE_PATH, newCode);
   };
 
   const handleStyleUpdate = async (newStyles: Record<string, string>) => {
-      if (!selectedElement) return;
+    if (!selectedElement) return;
+    let currentClass = selectedElement.className || '';
+    const newClassSegment = Object.values(newStyles).join(' ');
 
-      let currentClass = selectedElement.className || '';
-      const newClassSegment = Object.values(newStyles).join(' ');
+    if (newStyles.transform) {
+      currentClass = currentClass.replace(/\btranslate-[xy]-[^\s]+\s?/g, '');
+    }
+    if (newStyles.dimensions) {
+      currentClass = currentClass.replace(/\bw-[^\s]+\s?/g, '').replace(/\bh-[^\s]+\s?/g, '');
+    }
 
-      if (newStyles.transform) {
-          // Remove existing translate classes to avoid buildup
-          currentClass = currentClass.replace(/\btranslate-[xy]-[^\s]+\s?/g, '');
-      }
-      if (newStyles.dimensions) {
-          // Remove existing width/height classes
-          currentClass = currentClass.replace(/\bw-[^\s]+\s?/g, '').replace(/\bh-[^\s]+\s?/g, '');
-      }
-
-      const finalClass = `${currentClass} ${newClassSegment}`.trim();
-
-      await handleClassUpdate(finalClass);
+    const finalClass = `${currentClass} ${newClassSegment}`.trim();
+    await handleClassUpdate(finalClass);
   };
 
-  const handleCodeUpdate = async (newTree: FileSystemTree) => {
-    history.set(newTree);
-    if (container) {
-      await mountFileTree(newTree);
-    }
-  };
-
-  const handleUndo = async () => {
-    if (history.canUndo) {
-        history.undo();
-    }
-  };
-
-  const handleRedo = async () => {
-      if (history.canRedo) {
-          history.redo();
-      }
-  };
-
-  useEffect(() => {
-    const prompt = sessionStorage.getItem('studio_initial_prompt');
-    if (prompt) {
-      sessionStorage.removeItem('studio_initial_prompt');
-      const run = async () => {
-        const supabase = SupabaseService.getInstance().client;
-        const { data: { user } } = await supabase.auth.getUser();
-        if (user) {
-          await ensureProject(user.id);
-        }
-        // Wait for WebContainer to be ready before sending
-        const timer = setTimeout(() => {
-          if (!isContainerLoading) {
-            handleSendMessage(prompt);
-          }
-        }, 3000);
-        return () => clearTimeout(timer);
-      };
-      run();
-    }
-  }, []);
-
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if ((e.metaKey || e.ctrlKey) && e.key === 'z') {
-        if (e.shiftKey) {
-          handleRedo();
-        } else {
-          handleUndo();
-        }
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown);
-    return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [history]);
-
-  useEffect(() => {
-    if (container && fileTree && Object.keys(fileTree).length > 0) {
-        mountFileTree(fileTree).catch(console.error);
-    }
-  }, [fileTree, container]);
-
-  useEffect(() => {
-    // Load secrets on mount
-    const stored = localStorage.getItem('secrets');
-    if (stored) {
-      try {
-        const secrets = JSON.parse(stored);
-        const env: Record<string, string> = {};
-        secrets.forEach((s: any) => {
-          if (s.key) env[s.key] = s.value;
-        });
-        webContainerService.setEnv(env);
-      } catch (e) {
-        console.error('Failed to load secrets', e);
-      }
-    }
-  }, []);
-
-  // Hydrate file tree from last snapshot when container becomes available
-  useEffect(() => {
-    if (!container) return;
-
-    const projectId = sessionStorage.getItem('forge_project_id');
-    if (!projectId) return;
-
-    const hydrate = async () => {
-      setIsHydrating(true);
-      try {
-        const supabase = SupabaseService.getInstance().client;
-        const { data } = await supabase
-          .from('forge_snapshots')
-          .select('file_tree, created_at')
-          .eq('project_id', projectId)
-          .order('created_at', { ascending: false })
-          .limit(1);
-
-        if (data && data.length > 0 && data[0].file_tree) {
-          const parsedTree: FileSystemTree = typeof data[0].file_tree === 'string'
-            ? JSON.parse(data[0].file_tree)
-            : data[0].file_tree;
-          history.set(parsedTree);
-          await mountFileTree(parsedTree);
-        }
-      } catch (e) {
-        console.error('[hydrate] Failed to load snapshot:', e);
-      } finally {
-        setIsHydrating(false);
-      }
-    };
-
-    hydrate();
-  }, [container]);
-
+  // -------------------------------------------------------------------------
+  // AI chat handler
+  // -------------------------------------------------------------------------
   const handleSendMessage = async (message: string): Promise<{ success: boolean; modifiedFiles: string[] }> => {
+    if (isReadOnly) return { success: false, modifiedFiles: [] };
     setIsGenerating(true);
     try {
-      const result = await AIOrchestrator.parseUserCommand(message, fileTree, selectedElement);
-      if (result.tree) {
-        await handleCodeUpdate(result.tree);
-        await saveSnapshot(result.tree, 'ai_action');
-        return { success: true, modifiedFiles: result.modifiedFiles };
+      lastChangeSource.current = 'ai';
+      const result = await AIOrchestrator.parseUserCommand(message, files, selectedElement);
+      if (result.modifiedFiles.length > 0) {
+        await saveSnapshot('ai_action');
       }
-      return { success: false, modifiedFiles: [] };
+      return { success: true, modifiedFiles: result.modifiedFiles };
     } catch (error) {
-      console.error('Error processing message:', error);
+      console.error('[StudioEngine] Error processing message:', error);
       return { success: false, modifiedFiles: [] };
     } finally {
       setIsGenerating(false);
     }
   };
 
-  const handleUploadZip = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-       const tree = await uploadZip(e.target.files[0]);
-       if (tree) {
-           history.set(tree);
-           setShowTemplateSelector(false);
-           triggerBuild();
-           await saveSnapshot(tree, 'zip_upload');
-       }
-    }
-    // Reset so the same file can be re-uploaded if needed
-    e.target.value = '';
-  };
-
-  const handleLoadTemplate = async (templateKey: string) => {
-      const template = TEMPLATES[templateKey];
-      if (!template) return;
-
-      setShowTemplateSelector(false);
-
-      if (container) {
-          const treeWithIds = await mountFileTree(template);
-          if (treeWithIds) {
-              history.set(treeWithIds);
-              await saveSnapshot(treeWithIds, 'template_load');
-          } else {
-              history.set(template);
-              await saveSnapshot(template, 'template_load');
-          }
-          triggerBuild();
-      } else {
-          history.set(template);
-      }
-  };
-
-  const triggerBuild = async (force: boolean = false) => {
-      if (!container) return;
-
-      try {
-        console.log('[build] Configuring Shadcn/UI...');
-        await webContainerService.configureShadcn();
-
-        let shouldInstall = force;
-        if (!shouldInstall) {
-            try {
-                await container.fs.readdir('node_modules');
-                console.log('[build] node_modules exists, skipping install');
-            } catch {
-                shouldInstall = true;
-            }
-        }
-
-        if (shouldInstall) {
-            const env = webContainerService.getEnv();
-            const installProcess = await container.spawn('npm', ['install'], { env });
-            installProcess.output.pipeTo(new WritableStream({
-                write(data) { console.log('[install]', data); }
-            }));
-            await installProcess.exit;
-        }
-
-        // Start Dev Server
-        const env = webContainerService.getEnv();
-        const startProcess = await container.spawn('npm', ['run', 'dev'], { env });
-        startProcess.output.pipeTo(new WritableStream({
-            write(data) { console.log('[run dev]', data); }
-        }));
-      } catch (err) {
-        console.error('[build] Build failed', err);
-      }
-  };
-
-  const handleInstallPackage = async (packageName: string) => {
-      await installDependency(packageName, (data) => {
-          console.log('[install]', data);
-      });
-  };
-
-  useEffect(() => {
-    if (container) {
-         container.on('server-ready', (_port, url) => {
-            console.log('Server ready:', url);
-            setUrl(url);
-          });
-    }
-  }, [container]);
-
-  // Download logic
+  // -------------------------------------------------------------------------
+  // Download project as ZIP
+  // -------------------------------------------------------------------------
   const downloadProject = async () => {
     const zip = new JSZip();
-    const addFilesToZip = (tree: FileSystemTree, currentPath: string) => {
-      for (const [name, node] of Object.entries(tree)) {
-        if ('file' in node) {
-          const file = node.file;
-          if ('contents' in file) {
-            const content = file.contents;
-            zip.file(`${currentPath}${name}`, content);
-          }
-        } else if ('directory' in node) {
-          addFilesToZip(node.directory, `${currentPath}${name}/`);
-        }
-      }
-    };
-    addFilesToZip(fileTree, '');
+    for (const [path, content] of files) {
+      zip.file(path, content);
+    }
     const blob = await zip.generateAsync({ type: 'blob' });
     const objectUrl = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -539,36 +405,38 @@ export function StudioEngine() {
     URL.revokeObjectURL(objectUrl);
   };
 
-  // CodePanel component — rendered inside the CommandModal when Code tab is active
+  // Upload ZIP — show coming-soon toast
+  const handleUploadZip = () => {
+    alert('ZIP upload coming soon. Use the AI chat to describe your project instead!');
+  };
+
+  // -------------------------------------------------------------------------
+  // Derived state
+  // -------------------------------------------------------------------------
+  const fileTree = mapToFileSystemTree(files); // for legacy components (InspectorPanel, StateGraph, SettingsModal, HistoryDrawer)
+  const hasPreview = compiledHtml !== '';
+
+  // -------------------------------------------------------------------------
+  // Code panel (rendered inside CommandModal)
+  // -------------------------------------------------------------------------
   const CodePanel = () => (
     <div className="flex w-full h-full bg-gray-950">
       <div className="w-56 border-r border-gray-800 h-full overflow-hidden shrink-0">
         <FileExplorer
-          fileTree={fileTree}
+          files={files}
           onSelect={handleFileSelect}
-          onAddPackage={handleInstallPackage}
         />
       </div>
       <div className="flex-1 flex flex-col h-full overflow-hidden">
         <div className="h-10 border-b border-gray-800 flex items-center justify-between px-4 bg-gray-900 shrink-0">
           <span className="text-sm text-gray-400 truncate">{selectedFilePath || 'No file selected'}</span>
-          <div className="flex gap-2 shrink-0">
-            <button
-              onClick={() => triggerBuild(true)}
-              className="px-3 py-1 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded disabled:opacity-50 flex items-center gap-1"
-              title="Force Reinstall Dependencies"
-            >
-              <RefreshCw size={12} />
-              Reinstall
-            </button>
-            <button
-              onClick={saveAndRun}
-              disabled={!selectedFilePath}
-              className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white text-xs rounded disabled:opacity-50 disabled:cursor-not-allowed"
-            >
-              Save & Run
-            </button>
-          </div>
+          <button
+            onClick={saveAndRun}
+            disabled={!selectedFilePath}
+            className="px-3 py-1 bg-red-600 hover:bg-red-500 text-white text-xs rounded disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Save & Run
+          </button>
         </div>
         <textarea
           value={selectedFileContent}
@@ -581,234 +449,202 @@ export function StudioEngine() {
     </div>
   );
 
+  // -------------------------------------------------------------------------
+  // Render
+  // -------------------------------------------------------------------------
   return (
     <ProtectedRoute>
       <div className="flex flex-col h-screen w-screen bg-gray-950 text-white overflow-hidden">
         <Group orientation="vertical">
-          {/* Main Section */}
-        <Panel defaultSize={100} minSize={30}>
-          <div className="relative w-full h-full bg-gray-950">
+          <Panel defaultSize={100} minSize={30}>
+            <div className="relative w-full h-full bg-gray-950">
 
-            {/* Hamburger Menu — Top Left */}
-            <div className="absolute top-4 left-4 z-50">
-              <button
-                onClick={() => setShowHamburger((v) => !v)}
-                className="p-2 bg-gray-900/90 hover:bg-gray-800 border border-gray-700 rounded-lg shadow-lg text-gray-400 hover:text-white transition-colors"
-                title="Menu"
-              >
-                <Menu size={18} />
-              </button>
+              {/* Hamburger menu — top left */}
+              <div className="absolute top-4 left-4 z-50">
+                <button
+                  onClick={() => setShowHamburger(v => !v)}
+                  className="p-2 bg-gray-900/90 hover:bg-gray-800 border border-gray-700 rounded-lg shadow-lg text-gray-400 hover:text-white transition-colors"
+                  title="Menu"
+                >
+                  <Menu size={18} />
+                </button>
 
-              {showHamburger && (
-                <>
-                  {/* Backdrop to close on outside click */}
-                  <div
-                    className="fixed inset-0 z-40"
-                    onClick={() => setShowHamburger(false)}
-                  />
-                  <div className="absolute top-10 left-0 z-50 w-48 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl overflow-hidden py-1">
-                    {/* Upload Zip */}
-                    <label className="flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white cursor-pointer transition-colors">
-                      <Upload size={15} className="text-gray-400" />
-                      Upload Zip
-                      <input
-                        type="file"
-                        accept=".zip"
-                        ref={uploadZipRef}
-                        onChange={(e) => {
-                          setShowHamburger(false);
-                          handleUploadZip(e);
-                        }}
-                        className="hidden"
-                      />
-                    </label>
+                {showHamburger && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setShowHamburger(false)}
+                    />
+                    <div className="absolute top-10 left-0 z-50 w-48 bg-gray-900 border border-gray-700 rounded-xl shadow-2xl overflow-hidden py-1">
+                      {/* Upload Zip — coming soon */}
+                      <button
+                        onClick={() => { setShowHamburger(false); handleUploadZip(); }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                      >
+                        <Upload size={15} className="text-gray-400" />
+                        Upload Zip
+                      </button>
 
-                    {/* Export Zip */}
+                      {/* Export Zip */}
+                      <button
+                        onClick={() => { setShowHamburger(false); downloadProject(); }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                      >
+                        <Download size={15} className="text-gray-400" />
+                        Export Zip
+                      </button>
+
+                      <div className="my-1 h-px bg-gray-800" />
+
+                      {/* Settings */}
+                      <button
+                        onClick={() => { setShowHamburger(false); setShowSettings(true); }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                      >
+                        <Settings size={15} className="text-gray-400" />
+                        Settings
+                      </button>
+
+                      {/* Visual Graph */}
+                      <button
+                        onClick={() => { setShowHamburger(false); setShowGraph(true); }}
+                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                      >
+                        <Activity size={15} className="text-gray-400" />
+                        Visual Graph
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Read-only badge */}
+              {isReadOnly && (
+                <div className="absolute top-4 right-4 z-50 flex items-center gap-1.5 bg-yellow-900/80 border border-yellow-700 text-yellow-300 text-xs px-3 py-1.5 rounded-full">
+                  <Eye size={12} />
+                  View only
+                </div>
+              )}
+
+              {/* Main content area */}
+              {isLoading ? (
+                <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
+                  <Loader2 className="animate-spin w-8 h-8" />
+                  <div>Loading project...</div>
+                </div>
+              ) : hasPreview ? (
+                <div className="relative w-full h-full">
+                  {/* Edit mode toolbar */}
+                  <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-gray-900 border border-gray-700 rounded-lg flex overflow-hidden shadow-lg">
                     <button
-                      onClick={() => {
-                        setShowHamburger(false);
-                        downloadProject();
-                      }}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                      onClick={() => setEditMode('interaction')}
+                      className={`px-3 py-1.5 text-xs font-medium transition-colors ${editMode === 'interaction' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
                     >
-                      <Download size={15} className="text-gray-400" />
-                      Export Zip
+                      Interaction
                     </button>
-
-                    <div className="my-1 h-px bg-gray-800" />
-
-                    {/* Settings */}
                     <button
-                      onClick={() => {
-                        setShowHamburger(false);
-                        setShowSettings(true);
-                      }}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
+                      onClick={() => setEditMode('visual')}
+                      className={`px-3 py-1.5 text-xs font-medium transition-colors ${editMode === 'visual' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
                     >
-                      <Settings size={15} className="text-gray-400" />
-                      Settings
-                    </button>
-
-                    {/* Visual Graph */}
-                    <button
-                      onClick={() => {
-                        setShowHamburger(false);
-                        setShowGraph(true);
-                      }}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white transition-colors"
-                    >
-                      <Activity size={15} className="text-gray-400" />
-                      Visual Graph
-                    </button>
-
-                    <div className="my-1 h-px bg-gray-800" />
-
-                    {/* Undo / Redo — kept accessible in menu */}
-                    <button
-                      onClick={() => { setShowHamburger(false); handleUndo(); }}
-                      disabled={!history.canUndo}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
-                    >
-                      <X size={15} className="text-gray-400 rotate-45" />
-                      Undo
+                      Visual
                     </button>
                     <button
-                      onClick={() => { setShowHamburger(false); handleRedo(); }}
-                      disabled={!history.canRedo}
-                      className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-gray-300 hover:bg-gray-800 hover:text-white disabled:opacity-30 disabled:cursor-not-allowed transition-colors"
+                      onClick={() => { setActiveBottomTab('code'); setIsCommandModalOpen(true); }}
+                      className={`px-3 py-1.5 text-xs font-medium transition-colors flex items-center gap-1 ${activeBottomTab === 'code' && isCommandModalOpen ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
                     >
-                      <X size={15} className="text-gray-400 -rotate-45" />
-                      Redo
+                      <Code size={12} />
+                      Code
                     </button>
                   </div>
-                </>
-              )}
-            </div>
 
-             {/* Main Content Area — preview is always visible */}
-             {isHydrating ? (
-               <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
-                 <Loader2 className="animate-spin w-8 h-8" />
-                 <div>Restoring your project...</div>
-               </div>
-             ) : url ? (
-               <div className="relative w-full h-full">
-                 {/* Canvas Edit Mode Toolbar */}
-                 <div className="absolute top-4 left-1/2 -translate-x-1/2 z-40 bg-gray-900 border border-gray-700 rounded-lg flex overflow-hidden shadow-lg">
-                   <button
-                     onClick={() => setEditMode('interaction')}
-                     className={`px-3 py-1.5 text-xs font-medium transition-colors ${editMode === 'interaction' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                   >
-                     Interaction
-                   </button>
-                   <button
-                     onClick={() => setEditMode('visual')}
-                     className={`px-3 py-1.5 text-xs font-medium transition-colors ${editMode === 'visual' ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                   >
-                     Visual
-                   </button>
-                   <button
-                     onClick={() => {
-                       setActiveBottomTab('code');
-                       setIsCommandModalOpen(true);
-                     }}
-                     className={`px-3 py-1.5 text-xs font-medium transition-colors flex items-center gap-1 ${activeBottomTab === 'code' && isCommandModalOpen ? 'bg-red-600 text-white' : 'text-gray-400 hover:text-white'}`}
-                   >
-                     <Code size={12} />
-                     Code
-                   </button>
-                 </div>
-                 <iframe
-                   ref={iframeRef}
-                   src={url}
-                   className="w-full h-full border-none"
-                   title="Preview"
-                 />
-                 <PreviewOverlay
-                     iframeRef={iframeRef}
-                     onElementSelect={handleElementSelect}
-                     editMode={editMode}
-                     onUpdateStyle={handleStyleUpdate}
-                     onUpdateText={handleTextUpdate}
-                 />
-                 {editMode === 'visual' && selectedElement && (
-                     <InspectorPanel
-                         selectedElement={selectedElement}
-                         onUpdateStyle={handleClassUpdate}
-                         onUpdateProp={handlePropUpdate}
-                         fileTree={fileTree}
-                     />
-                 )}
-               </div>
-             ) : (
-                <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
-                  {isContainerLoading ? (
-                       <>
-                           <Loader2 className="animate-spin w-8 h-8" />
-                           <div>Initializing WebContainer...</div>
-                       </>
-                  ) : (
-                       showTemplateSelector && Object.keys(fileTree).length === 0 ? (
-                           <div className="flex flex-col items-center gap-6 max-w-2xl w-full px-8">
-                               <div className="text-center">
-                                   <h2 className="text-2xl font-bold text-gray-300 mb-2">Start a New Project</h2>
-                                   <p className="text-gray-500">Choose a template to get started quickly or upload your own.</p>
-                               </div>
+                  {/* Compiling indicator */}
+                  {isCompiling && (
+                    <div className="absolute bottom-4 right-4 z-40 flex items-center gap-2 bg-gray-900/90 border border-gray-700 text-gray-400 text-xs px-3 py-1.5 rounded-full">
+                      <Loader2 size={12} className="animate-spin" />
+                      Compiling…
+                    </div>
+                  )}
 
-                               <div className="grid grid-cols-2 gap-4 w-full">
-                                   <button
-                                       onClick={() => handleLoadTemplate('landing-page')}
-                                       className="flex flex-col items-center p-6 bg-gray-800 border-2 border-gray-700 hover:border-red-500 rounded-xl transition-all group text-left"
-                                   >
-                                       <div className="p-3 rounded-full bg-red-900/30 text-red-400 mb-4 group-hover:scale-110 transition-transform">
-                                           <LayoutTemplate className="w-8 h-8" />
-                                       </div>
-                                       <h3 className="text-lg font-semibold text-gray-200 mb-1">Landing Page</h3>
-                                       <p className="text-sm text-gray-500 text-center">Modern hero section with features grid and responsive navbar.</p>
-                                   </button>
+                  <iframe
+                    ref={iframeRef}
+                    srcdoc={compiledHtml}
+                    sandbox="allow-scripts allow-modals"
+                    className="w-full h-full border-none"
+                    title="Preview"
+                  />
 
-                                   <button
-                                       onClick={() => handleLoadTemplate('dashboard')}
-                                       className="flex flex-col items-center p-6 bg-gray-800 border-2 border-gray-700 hover:border-red-500 rounded-xl transition-all group text-left"
-                                   >
-                                       <div className="p-3 rounded-full bg-red-900/30 text-red-400 mb-4 group-hover:scale-110 transition-transform">
-                                           <LayoutTemplate className="w-8 h-8" />
-                                       </div>
-                                       <h3 className="text-lg font-semibold text-gray-200 mb-1">Dashboard</h3>
-                                       <p className="text-sm text-gray-500 text-center">Admin layout with sidebar, header, and stats cards.</p>
-                                   </button>
-                               </div>
+                  <PreviewOverlay
+                    iframeRef={iframeRef}
+                    onElementSelect={handleElementSelect}
+                    editMode={editMode}
+                    onUpdateStyle={handleStyleUpdate}
+                    onUpdateText={handleTextUpdate}
+                  />
 
-                               <div className="relative w-full flex items-center gap-4 my-4">
-                                   <div className="h-px bg-gray-800 flex-1"></div>
-                                   <span className="text-xs text-gray-600 uppercase font-medium">Or</span>
-                                   <div className="h-px bg-gray-800 flex-1"></div>
-                               </div>
-
-                               <label className="cursor-pointer text-sm text-gray-400 hover:text-white transition-colors flex items-center gap-2">
-                                   <Upload className="w-4 h-4" />
-                                   Upload a .zip file
-                                   <input type="file" accept=".zip" onChange={handleUploadZip} className="hidden" />
-                               </label>
-                           </div>
-                       ) : (
-                         <div className="text-center">
-                             <div className="mb-2">Ready to Code</div>
-                             <div className="text-sm">Waiting for server...</div>
-                         </div>
-                       )
+                  {editMode === 'visual' && selectedElement && (
+                    <InspectorPanel
+                      selectedElement={selectedElement}
+                      onUpdateStyle={handleClassUpdate}
+                      onUpdateProp={handlePropUpdate}
+                      fileTree={fileTree}
+                    />
                   )}
                 </div>
-             )}
-          </div>
-        </Panel>
+              ) : (
+                /* Template selector / waiting state */
+                <div className="flex flex-col items-center justify-center h-full text-gray-500 gap-4">
+                  {showTemplateSelector ? (
+                    <div className="flex flex-col items-center gap-6 max-w-2xl w-full px-8">
+                      <div className="text-center">
+                        <h2 className="text-2xl font-bold text-gray-300 mb-2">Start a New Project</h2>
+                        <p className="text-gray-500">Choose a template to get started quickly.</p>
+                      </div>
 
+                      <div className="grid grid-cols-2 gap-4 w-full">
+                        <button
+                          onClick={() => handleLoadTemplate('landing-page')}
+                          className="flex flex-col items-center p-6 bg-gray-800 border-2 border-gray-700 hover:border-red-500 rounded-xl transition-all group text-left"
+                        >
+                          <div className="p-3 rounded-full bg-red-900/30 text-red-400 mb-4 group-hover:scale-110 transition-transform">
+                            <LayoutTemplate className="w-8 h-8" />
+                          </div>
+                          <h3 className="text-lg font-semibold text-gray-200 mb-1">Landing Page</h3>
+                          <p className="text-sm text-gray-500 text-center">Modern hero section with features grid and responsive navbar.</p>
+                        </button>
+
+                        <button
+                          onClick={() => handleLoadTemplate('dashboard')}
+                          className="flex flex-col items-center p-6 bg-gray-800 border-2 border-gray-700 hover:border-red-500 rounded-xl transition-all group text-left"
+                        >
+                          <div className="p-3 rounded-full bg-red-900/30 text-red-400 mb-4 group-hover:scale-110 transition-transform">
+                            <LayoutTemplate className="w-8 h-8" />
+                          </div>
+                          <h3 className="text-lg font-semibold text-gray-200 mb-1">Dashboard</h3>
+                          <p className="text-sm text-gray-500 text-center">Admin layout with sidebar, header, and stats cards.</p>
+                        </button>
+                      </div>
+
+                      <p className="text-xs text-gray-600">Or use the chat to describe what you want to build →</p>
+                    </div>
+                  ) : (
+                    <div className="text-center">
+                      <Loader2 className="animate-spin w-6 h-6 mx-auto mb-2" />
+                      <div className="text-sm">Compiling preview…</div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </Panel>
         </Group>
 
-        <CommandBubble
-          onClick={() => setIsCommandModalOpen(true)}
-          onHistoryClick={() => setIsHistoryOpen(true)}
-        />
+        {/* Command bubble — hidden in read-only mode */}
+        {!isReadOnly && (
+          <CommandBubble
+            onClick={() => setIsCommandModalOpen(true)}
+            onHistoryClick={() => setIsHistoryOpen(true)}
+          />
+        )}
 
         {isCommandModalOpen && (
           <CommandModal
@@ -816,24 +652,21 @@ export function StudioEngine() {
             visualEditMode={editMode === 'visual'}
             onToggleVisualEdit={(active) => setEditMode(active ? 'visual' : 'interaction')}
             activeTab={activeBottomTab}
-            setActiveTab={(tab) => {
-              setActiveBottomTab(tab);
-            }}
+            setActiveTab={(tab) => setActiveBottomTab(tab)}
           >
-             <div className="h-full w-full flex flex-col">
-                <div className={`w-full h-full ${activeBottomTab === 'chat' ? 'block' : 'hidden'}`}>
-                    <ChatInterface
-                        isLoading={isGenerating}
-                        onSendMessage={handleSendMessage}
-                        selectedElement={selectedElement}
-                    />
-                </div>
-                {/* Visual tab content is handled entirely inside CommandModal (toggle switch) */}
-                <div className={`w-full h-full ${activeBottomTab === 'visual' ? 'block' : 'hidden'}`} />
-                <div className={`w-full h-full ${activeBottomTab === 'code' ? 'flex' : 'hidden'}`}>
-                    <CodePanel />
-                </div>
-             </div>
+            <div className="h-full w-full flex flex-col">
+              <div className={`w-full h-full ${activeBottomTab === 'chat' ? 'block' : 'hidden'}`}>
+                <ChatInterface
+                  isLoading={isGenerating}
+                  onSendMessage={handleSendMessage}
+                  selectedElement={selectedElement}
+                />
+              </div>
+              <div className={`w-full h-full ${activeBottomTab === 'visual' ? 'block' : 'hidden'}`} />
+              <div className={`w-full h-full ${activeBottomTab === 'code' ? 'flex' : 'hidden'}`}>
+                <CodePanel />
+              </div>
+            </div>
           </CommandModal>
         )}
 
@@ -841,12 +674,16 @@ export function StudioEngine() {
         {showGraph && <StateGraph fileTree={fileTree} onClose={() => setShowGraph(false)} />}
 
         <HistoryDrawer
-          projectId={sessionStorage.getItem('forge_project_id')}
+          projectId={projectId ?? null}
           isOpen={isHistoryOpen}
           onClose={() => setIsHistoryOpen(false)}
           onRestore={async (tree) => {
-            history.set(tree);
-            if (container) await mountFileTree(tree);
+            // Phase 2: restore saves each file to forge_files via the hook
+            const restoredFiles = fileSystemTreeToMap(tree);
+            for (const [path, content] of restoredFiles) {
+              updateLocalFile(path, content);
+              await saveFile(path, content);
+            }
             setIsHistoryOpen(false);
           }}
           currentTree={fileTree}

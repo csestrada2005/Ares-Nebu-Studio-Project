@@ -81,6 +81,14 @@ export function PreviewOverlay({ iframeRef, onElementSelect, editMode, onUpdateS
 
   useEffect(() => {
     const handleMessage = (event: MessageEvent) => {
+      // Phase 4 Fix 2: clear stale selection when AI regenerates App.tsx
+      if (event.data?.type === 'clear-selection') {
+        setSelectedRect(null);
+        setSelectedElementInfo(null);
+        setHoveredRect(null);
+        return;
+      }
+
       // Handle click (selection)
       if (event.data?.type === 'element-clicked' || event.data?.type === 'element-selected-response') {
         setSelectedRect(event.data.rect);
@@ -142,6 +150,17 @@ export function PreviewOverlay({ iframeRef, onElementSelect, editMode, onUpdateS
              const layoutCtx: LayoutContext = selectedElementInfo?.layoutContext ?? DEFAULT_LAYOUT_CONTEXT;
              const classes = classNamesForLayout({ dx: newX, dy: newY }, layoutCtx);
              onUpdateStyle({ transform: classes });
+
+             // Phase 4 Fix 3: update selectedElementInfo so the next drag reads
+             // the correct (post-drag) className instead of the stale pre-drag one.
+             setSelectedElementInfo(prev =>
+               prev ? { ...prev, className: [prev.className ?? '', classes].join(' ').trim() } : null
+             );
+
+             // Clear the proxy's inline transform so Moveable doesn't double-apply it.
+             if (proxyRef.current) {
+               proxyRef.current.style.transform = '';
+             }
         }
     }
   };
