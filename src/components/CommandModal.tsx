@@ -1,6 +1,6 @@
-import { X, MessageSquare, MousePointer2, Edit3 } from "lucide-react";
+import { X, MessageSquare, MousePointer2, Edit3, Code } from "lucide-react";
 
-type TabType = "chat" | "visual";
+type TabType = "chat" | "visual" | "code";
 
 interface CommandModalProps {
   onClose: () => void;
@@ -16,7 +16,7 @@ export const CommandModal = ({ onClose, visualEditMode, onToggleVisualEdit, chil
   return (
     <>
       <div className="fixed inset-0 z-[60] bg-black/40 backdrop-blur-sm" onClick={onClose} />
-      <div className="fixed z-[70] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[92vw] max-w-[800px] h-[75vh] max-h-[700px] rounded-2xl border border-gray-800 flex flex-col bg-gray-900 shadow-2xl overflow-hidden">
+      <div className="fixed z-[70] top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[92vw] max-w-[900px] h-[75vh] max-h-[700px] rounded-2xl border border-gray-800 flex flex-col bg-gray-900 shadow-2xl overflow-hidden">
         {/* Header Tabs */}
         <div className="flex items-center justify-between px-4 py-3 border-b border-gray-800 bg-gray-950/50 shrink-0">
           <div className="flex items-center gap-1 p-1 rounded-lg bg-gray-800/50 border border-gray-800">
@@ -33,6 +33,13 @@ export const CommandModal = ({ onClose, visualEditMode, onToggleVisualEdit, chil
              >
                <MousePointer2 size={16} />
                Visual
+             </button>
+             <button
+               onClick={() => setActiveTab('code')}
+               className={`flex items-center gap-2 px-3 py-1.5 text-sm font-medium rounded-md transition-all ${activeTab === 'code' ? 'bg-red-600 text-white shadow-sm' : 'text-gray-400 hover:text-gray-200 hover:bg-gray-800'}`}
+             >
+               <Code size={16} />
+               Code
              </button>
           </div>
           <button onClick={onClose} className="p-2 text-gray-400 hover:text-white hover:bg-gray-800 rounded-full transition-colors">
@@ -63,6 +70,13 @@ export const CommandModal = ({ onClose, visualEditMode, onToggleVisualEdit, chil
                    </div>
                )}
              </div>
+          )}
+
+          {activeTab === 'code' && (
+            <div className="p-3 border-b border-gray-800 bg-gray-950 shrink-0 flex items-start gap-2 text-xs text-gray-400">
+              <Code size={13} className="mt-0.5 shrink-0 text-gray-500" />
+              <p>Browse and edit your project files. Click <span className="text-white font-medium">Save &amp; Run</span> to apply changes to the preview.</p>
+            </div>
           )}
 
           <div className="flex-1 overflow-hidden">

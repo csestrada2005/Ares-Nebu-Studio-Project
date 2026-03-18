@@ -1,32 +1,118 @@
-import { useState } from "react";
-import { Layers, Flame, Plus, Search, Settings, LogOut } from "lucide-react";
+import { useState, useEffect } from "react";
+import { Layers, Flame, Plus, Search, Settings, LogOut, Trash2, Loader2 } from "lucide-react";
 import { useNavigate } from "react-router-dom";
+import { SupabaseService } from "@/services/SupabaseService";
+import { useAuth } from "@/contexts/AuthContext";
 
-const mockProjects = [
-  { id: "1", name: "Coffee Landing", url: "coffeesub.com", updated: "2 hours ago", status: "Live" },
-  { id: "2", name: "Portfolio Site", url: "myportfolio.dev", updated: "1 day ago", status: "Draft" },
-  { id: "3", name: "SaaS Dashboard", url: "analytics.io", updated: "3 days ago", status: "Live" },
-  { id: "4", name: "E-commerce Store", url: "shopnow.com", updated: "1 week ago", status: "Draft" },
-  { id: "5", name: "Blog Platform", url: "devblog.co", updated: "2 weeks ago", status: "Live" },
-  { id: "6", name: "Fitness App", url: "fittrack.app", updated: "3 weeks ago", status: "Draft" },
-];
+interface ForgeProject {
+  id: string;
+  name: string;
+  description: string | null;
+  created_at: string;
+  updated_at: string;
+}
 
 const ForgeDashboard = () => {
   const [activeTab, setActiveTab] = useState<"projects" | "forge">("projects");
   const [forgeInput, setForgeInput] = useState("");
   const [searchQuery, setSearchQuery] = useState("");
+  const [projects, setProjects] = useState<ForgeProject[]>([]);
+  const [isLoadingProjects, setIsLoadingProjects] = useState(true);
+  const [isCreating, setIsCreating] = useState(false);
   const navigate = useNavigate();
+  const { user } = useAuth();
 
-  const filteredProjects = mockProjects.filter((p) =>
+  const supabase = SupabaseService.getInstance().client;
+
+  // Fetch projects on mount
+  useEffect(() => {
+    if (!user) return;
+    const fetchProjects = async () => {
+      setIsLoadingProjects(true);
+      try {
+        const { data, error } = await supabase
+          .from("forge_projects")
+          .select("id, name, description, created_at, updated_at")
+          .eq("user_id", user.id)
+          .order("updated_at", { ascending: false });
+        if (!error && data) {
+          setProjects(data as ForgeProject[]);
+        }
+      } finally {
+        setIsLoadingProjects(false);
+      }
+    };
+    fetchProjects();
+  }, [user]);
+
+  const filteredProjects = projects.filter((p) =>
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-    p.url.toLowerCase().includes(searchQuery.toLowerCase())
+    (p.description ?? "").toLowerCase().includes(searchQuery.toLowerCase())
   );
 
-  const handleForge = () => {
-    if (forgeInput.trim()) {
-      sessionStorage.setItem("studio_initial_prompt", forgeInput.trim());
+  const createAndOpenProject = async (name: string, description?: string) => {
+    if (!user) return;
+    setIsCreating(true);
+    try {
+      const { data, error } = await supabase
+        .from("forge_projects")
+        .insert({ user_id: user.id, name, description: description ?? null })
+        .select("id, name")
+        .single();
+      if (error || !data) throw error;
+      sessionStorage.setItem("forge_project_id", data.id);
+      sessionStorage.setItem("forge_project_name", data.name);
       navigate("/studio");
+    } catch (e) {
+      console.error("[ForgeDashboard] Failed to create project:", e);
+    } finally {
+      setIsCreating(false);
     }
+  };
+
+  const openProject = (project: ForgeProject) => {
+    sessionStorage.setItem("forge_project_id", project.id);
+    sessionStorage.setItem("forge_project_name", project.name);
+    navigate("/studio");
+  };
+
+  const deleteProject = async (e: React.MouseEvent, projectId: string) => {
+    e.stopPropagation();
+    if (!window.confirm("Delete this project? This cannot be undone.")) return;
+    const { error } = await supabase
+      .from("forge_projects")
+      .delete()
+      .eq("id", projectId);
+    if (!error) {
+      setProjects((prev) => prev.filter((p) => p.id !== projectId));
+    }
+  };
+
+  const handleNewProject = async () => {
+    const name = window.prompt("Project name:");
+    if (name?.trim()) {
+      await createAndOpenProject(name.trim());
+    }
+  };
+
+  const handleForge = async () => {
+    if (!forgeInput.trim()) return;
+    sessionStorage.setItem("studio_initial_prompt", forgeInput.trim());
+    const projectName = forgeInput.trim().slice(0, 60);
+    await createAndOpenProject(projectName);
+  };
+
+  const formatDate = (iso: string) => {
+    const d = new Date(iso);
+    const now = new Date();
+    const diffMs = now.getTime() - d.getTime();
+    const diffMins = Math.floor(diffMs / 60000);
+    if (diffMins < 60) return `${diffMins}m ago`;
+    const diffHrs = Math.floor(diffMins / 60);
+    if (diffHrs < 24) return `${diffHrs}h ago`;
+    const diffDays = Math.floor(diffHrs / 24);
+    if (diffDays < 7) return `${diffDays}d ago`;
+    return d.toLocaleDateString();
   };
 
   return (
@@ -102,45 +188,66 @@ const ForgeDashboard = () => {
                   />
                 </div>
                 <button
-                  onClick={() => navigate("/studio")}
-                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-red-600 hover:bg-red-500 text-white transition-colors"
+                  onClick={handleNewProject}
+                  disabled={isCreating}
+                  className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  <Plus size={16} />
+                  {isCreating ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
                   New Project
                 </button>
               </div>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-              {filteredProjects.map((project, i) => (
-                <button
-                  key={project.id}
-                  onClick={() => navigate("/studio")}
-                  className="text-left rounded-xl border border-gray-800 bg-gray-900 p-4 transition-all duration-200 hover:border-red-500/40 hover:scale-[1.02] hover:bg-gray-800/80 group"
-                  style={{ animationDelay: `${i * 60}ms` }}
-                >
-                  <div className="w-full h-32 rounded-lg mb-3 flex items-center justify-center bg-gray-800 group-hover:bg-gray-700 transition-colors">
-                    <Layers size={24} className="text-gray-600 group-hover:text-gray-400 transition-colors" />
-                  </div>
-                  <div className="flex items-start justify-between">
-                    <div>
-                      <h3 className="text-sm font-semibold text-white">{project.name}</h3>
-                      <p className="text-xs mt-0.5 text-gray-500">{project.url}</p>
-                    </div>
-                    <span
-                      className={`text-[10px] font-medium px-2 py-0.5 rounded-full ${
-                        project.status === "Live"
-                          ? "bg-red-600/15 text-red-400"
-                          : "bg-gray-700 text-gray-400"
-                      }`}
+            {isLoadingProjects ? (
+              <div className="flex items-center justify-center h-48 text-gray-500 gap-3">
+                <Loader2 size={22} className="animate-spin" />
+                <span>Loading projects...</span>
+              </div>
+            ) : filteredProjects.length === 0 ? (
+              <div className="flex flex-col items-center justify-center h-48 text-center text-gray-500 gap-3">
+                <Layers size={32} className="text-gray-700" />
+                <p className="text-sm">
+                  {searchQuery
+                    ? "No projects match your search."
+                    : "No projects yet. Head to the Forge tab to create your first one!"}
+                </p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                {filteredProjects.map((project, i) => (
+                  <button
+                    key={project.id}
+                    onClick={() => openProject(project)}
+                    className="relative text-left rounded-xl border border-gray-800 bg-gray-900 p-4 transition-all duration-200 hover:border-red-500/40 hover:scale-[1.02] hover:bg-gray-800/80 group"
+                    style={{ animationDelay: `${i * 60}ms` }}
+                  >
+                    {/* Delete button */}
+                    <button
+                      onClick={(e) => deleteProject(e, project.id)}
+                      className="absolute top-3 right-3 p-1.5 rounded-md text-gray-600 hover:text-red-400 hover:bg-red-400/10 opacity-0 group-hover:opacity-100 transition-all"
+                      title="Delete project"
                     >
-                      {project.status}
-                    </span>
-                  </div>
-                  <p className="text-[11px] mt-2 text-gray-600">Updated {project.updated}</p>
-                </button>
-              ))}
-            </div>
+                      <Trash2 size={14} />
+                    </button>
+
+                    <div className="w-full h-32 rounded-lg mb-3 flex items-center justify-center bg-gray-800 group-hover:bg-gray-700 transition-colors">
+                      <Layers size={24} className="text-gray-600 group-hover:text-gray-400 transition-colors" />
+                    </div>
+                    <div className="flex items-start justify-between pr-2">
+                      <div className="min-w-0">
+                        <h3 className="text-sm font-semibold text-white truncate">{project.name}</h3>
+                        {project.description && (
+                          <p className="text-xs mt-0.5 text-gray-500 truncate">{project.description}</p>
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-[11px] mt-2 text-gray-600">
+                      Updated {formatDate(project.updated_at)}
+                    </p>
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
         ) : (
           /* Forge View */
@@ -173,9 +280,10 @@ const ForgeDashboard = () => {
                 <div className="flex justify-end px-3 pb-2">
                   <button
                     onClick={handleForge}
-                    disabled={!forgeInput.trim()}
-                    className="px-5 py-2 rounded-xl text-sm font-medium bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                    disabled={!forgeInput.trim() || isCreating}
+                    className="px-5 py-2 rounded-xl text-sm font-medium bg-red-600 hover:bg-red-500 text-white transition-colors disabled:opacity-30 disabled:cursor-not-allowed flex items-center gap-2"
                   >
+                    {isCreating && <Loader2 size={14} className="animate-spin" />}
                     Forge →
                   </button>
                 </div>
