@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { X, Lock, Github, Rocket, Eye, EyeOff, Plus, Trash2, Save, Database } from 'lucide-react';
+import { X, Lock, Github, Rocket, Eye, EyeOff, Plus, Trash2, Save, Database, Globe, Mail, Loader2, CheckCircle } from 'lucide-react';
 import { webContainerService } from '../../services/WebContainerService';
 import { DeployManager } from '../deploy/DeployManager';
 import { gitHubService } from '../../services/GitHubService';
@@ -15,11 +15,15 @@ import { UsagePanel } from './db/UsagePanel';
 import { TrafficCharts } from './analytics/TrafficCharts';
 import { LighthousePanel } from './analytics/LighthousePanel';
 import { TopPagesTable } from './analytics/TopPagesTable';
+import { DomainsPanel } from './DomainsPanel';
+import { EmailPanel } from './EmailPanel';
+import { projectDBService } from '../../services/ProjectDBService';
 import { BarChart3 } from 'lucide-react';
 
 interface SettingsModalProps {
   onClose: () => void;
   fileTree: FileSystemTree;
+  files?: Map<string, string>;
 }
 
 interface Secret {
@@ -27,8 +31,18 @@ interface Secret {
   value: string;
 }
 
-type MainTab = 'secrets' | 'github' | 'deploy' | 'database' | 'analytics';
+type MainTab = 'secrets' | 'github' | 'deploy' | 'domains' | 'database' | 'email' | 'analytics';
 type DbSubTab = 'overview' | 'schema' | 'users' | 'sql' | 'functions' | 'logs' | 'secrets' | 'usage';
+
+const PLATFORM_MANAGED_KEYS = new Set([
+  'ANTHROPIC_API_KEY',
+  'GOOGLE_API_KEY',
+  'GOOGLE_PSI_KEY',
+  'VERCEL_TOKEN',
+  'CLOUDFLARE_API_KEY',
+  'RESEND_API_KEY',
+  'SUPABASE_SERVICE_ROLE_KEY',
+]);
 
 const DB_SUB_TABS: { id: DbSubTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -41,7 +55,7 @@ const DB_SUB_TABS: { id: DbSubTab; label: string }[] = [
   { id: 'usage', label: 'Usage' },
 ];
 
-export function SettingsModal({ onClose, fileTree }: SettingsModalProps) {
+export function SettingsModal({ onClose, fileTree, files }: SettingsModalProps) {
   const [activeTab, setActiveTab] = useState<MainTab>('secrets');
   const [dbSubTab, setDbSubTab] = useState<DbSubTab>('overview');
 
@@ -60,7 +74,7 @@ export function SettingsModal({ onClose, fileTree }: SettingsModalProps) {
     setDateRange({ start, end });
   };
 
-  // Secrets State (legacy localStorage tab kept for secrets main tab)
+  // Secrets State (user-managed only)
   const [secrets, setSecrets] = useState<Secret[]>([]);
   const [newKey, setNewKey] = useState('');
   const [newValue, setNewValue] = useState('');
@@ -73,28 +87,46 @@ export function SettingsModal({ onClose, fileTree }: SettingsModalProps) {
   const [isPushing, setIsPushing] = useState(false);
   const [pushStatus, setPushStatus] = useState<{ success: boolean; message: string } | null>(null);
 
+  // DB provisioning state
+  const [hasProjectDb, setHasProjectDb] = useState<boolean | null>(null);
+  const [isProvisioning, setIsProvisioning] = useState(false);
+  const [provisionStage, setProvisionStage] = useState('');
+  const [provisionedUrl, setProvisionedUrl] = useState<string | null>(null);
+
   useEffect(() => {
     const stored = localStorage.getItem('secrets');
     if (stored) {
       try {
-        setSecrets(JSON.parse(stored));
+        const parsed: Secret[] = JSON.parse(stored);
+        setSecrets(parsed.filter(s => !PLATFORM_MANAGED_KEYS.has(s.key)));
       } catch (e) {
         console.error('Failed to parse secrets', e);
       }
     }
   }, []);
 
+  useEffect(() => {
+    if (projectId) {
+      projectDBService.getCredentials(projectId).then(creds => {
+        setHasProjectDb(!!creds.projectUrl);
+        if (creds.projectUrl) setProvisionedUrl(creds.projectUrl);
+      }).catch(() => setHasProjectDb(false));
+    }
+  }, [projectId]);
+
   const handleSaveSecrets = () => {
     localStorage.setItem('secrets', JSON.stringify(secrets));
     const env: Record<string, string> = {};
-    secrets.forEach(s => {
-      if (s.key) env[s.key] = s.value;
-    });
+    secrets.forEach(s => { if (s.key) env[s.key] = s.value; });
     webContainerService.setEnv(env);
   };
 
   const addSecret = () => {
     if (!newKey.trim()) return;
+    if (PLATFORM_MANAGED_KEYS.has(newKey.trim())) {
+      alert(`"${newKey.trim()}" is platform-managed and cannot be added here.`);
+      return;
+    }
     setSecrets([...secrets, { key: newKey.trim(), value: newValue }]);
     setNewKey('');
     setNewValue('');
@@ -107,17 +139,46 @@ export function SettingsModal({ onClose, fileTree }: SettingsModalProps) {
   };
 
   const handleGitHubPush = async () => {
-      setIsPushing(true);
-      setPushStatus(null);
-      try {
-          const url = await gitHubService.pushToRepo(repoName, branch, fileTree, commitMessage);
-          setPushStatus({ success: true, message: `Successfully pushed to ${url}` });
-      } catch (error: any) {
-          setPushStatus({ success: false, message: error.message });
-      } finally {
-          setIsPushing(false);
-      }
+    setIsPushing(true);
+    setPushStatus(null);
+    try {
+      const url = await gitHubService.pushToRepo(repoName, branch, fileTree, commitMessage);
+      setPushStatus({ success: true, message: `Successfully pushed to ${url}` });
+    } catch (error: any) {
+      setPushStatus({ success: false, message: error.message });
+    } finally {
+      setIsPushing(false);
+    }
   };
+
+  const handleProvisionDB = async () => {
+    if (!projectId) return;
+    setIsProvisioning(true);
+    setProvisionStage('Creating database...');
+    try {
+      // Poll status by stage — server polls internally but we show progress
+      setTimeout(() => setProvisionStage('Waiting for database to be ready...'), 5000);
+      const result = await projectDBService.provision(projectId);
+      setProvisionStage('Done!');
+      setHasProjectDb(true);
+      setProvisionedUrl(result.projectUrl);
+    } catch (e: any) {
+      setProvisionStage('');
+      alert(e?.message || 'Provisioning failed');
+    } finally {
+      setTimeout(() => { setIsProvisioning(false); setProvisionStage(''); }, 2000);
+    }
+  };
+
+  const TAB_BUTTON = (id: MainTab, label: string, Icon: React.ComponentType<any>) => (
+    <button
+      onClick={() => setActiveTab(id)}
+      className={`px-3 py-2 text-sm font-medium rounded-t-lg transition-colors flex items-center gap-2 ${activeTab === id ? 'bg-gray-800 text-white border-b-2 border-blue-500' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}
+    >
+      <Icon size={15} />
+      {label}
+    </button>
+  );
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
@@ -130,280 +191,249 @@ export function SettingsModal({ onClose, fileTree }: SettingsModalProps) {
         </div>
 
         {/* Main tabs */}
-        <div className="flex gap-2 mb-6 border-b border-gray-800 pb-1">
-            <button
-                onClick={() => setActiveTab('secrets')}
-                className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors flex items-center gap-2 ${activeTab === 'secrets' ? 'bg-gray-800 text-white border-b-2 border-blue-500' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}
-            >
-                <Lock size={16} />
-                Secrets
-            </button>
-            <button
-                onClick={() => setActiveTab('github')}
-                className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors flex items-center gap-2 ${activeTab === 'github' ? 'bg-gray-800 text-white border-b-2 border-blue-500' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}
-            >
-                <Github size={16} />
-                GitHub Sync
-            </button>
-            <button
-                onClick={() => setActiveTab('deploy')}
-                className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors flex items-center gap-2 ${activeTab === 'deploy' ? 'bg-gray-800 text-white border-b-2 border-blue-500' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}
-            >
-                <Rocket size={16} />
-                Deploy
-            </button>
-            <button
-                onClick={() => setActiveTab('database')}
-                className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors flex items-center gap-2 ${activeTab === 'database' ? 'bg-gray-800 text-white border-b-2 border-blue-500' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}
-            >
-                <Database size={16} />
-                Database
-            </button>
-            <button
-                onClick={() => setActiveTab('analytics')}
-                className={`px-4 py-2 text-sm font-medium rounded-t-lg transition-colors flex items-center gap-2 ${activeTab === 'analytics' ? 'bg-gray-800 text-white border-b-2 border-blue-500' : 'text-gray-400 hover:text-white hover:bg-gray-800/50'}`}
-            >
-                <BarChart3 size={16} />
-                Analytics
-            </button>
+        <div className="flex gap-1 mb-6 border-b border-gray-800 pb-1 overflow-x-auto">
+          {TAB_BUTTON('secrets', 'Secrets', Lock)}
+          {TAB_BUTTON('github', 'GitHub', Github)}
+          {TAB_BUTTON('deploy', 'Deploy', Rocket)}
+          {TAB_BUTTON('domains', 'Domains', Globe)}
+          {TAB_BUTTON('database', 'Database', Database)}
+          {TAB_BUTTON('email', 'Email', Mail)}
+          {TAB_BUTTON('analytics', 'Analytics', BarChart3)}
         </div>
 
         <div className="flex-1 overflow-y-auto min-h-0 pr-2 custom-scrollbar">
-            {activeTab === 'secrets' && (
-                <div className="space-y-6">
-                    <div className="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
-                        <p className="text-sm text-gray-400 mb-4">
-                            Environment variables stored here will be injected into the WebContainer process.
-                            They are stored locally in your browser.
-                        </p>
+          {/* Secrets tab */}
+          {activeTab === 'secrets' && (
+            <div className="space-y-6">
+              <div className="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                <p className="text-sm text-gray-400 mb-4">
+                  User-managed secrets (e.g. <code>GITHUB_TOKEN</code>) are stored locally and injected into the WebContainer.
+                  Platform keys (Anthropic, Vercel, etc.) are managed server-side.
+                </p>
 
-                        <div className="flex gap-2 mb-4">
-                            <input
-                                type="text"
-                                placeholder="KEY (e.g. VERCEL_TOKEN)"
-                                value={newKey}
-                                onChange={(e) => setNewKey(e.target.value)}
-                                className="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                            />
-                            <input
-                                type="password"
-                                placeholder="VALUE"
-                                value={newValue}
-                                onChange={(e) => setNewValue(e.target.value)}
-                                className="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                            />
-                            <button
-                                onClick={addSecret}
-                                disabled={!newKey.trim()}
-                                className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors flex items-center gap-2"
-                            >
-                                <Plus size={16} />
-                                Add
-                            </button>
-                        </div>
-                    </div>
-
-                    <div className="space-y-2">
-                        {secrets.length === 0 ? (
-                            <div className="text-center text-gray-500 py-4">No secrets added yet.</div>
-                        ) : (
-                            secrets.map((secret, index) => (
-                                <div key={index} className="flex items-center gap-2 bg-gray-800/50 p-3 rounded border border-gray-800 group hover:border-gray-700 transition-colors">
-                                    <div className="flex-1 font-mono text-sm text-blue-400 truncate" title={secret.key}>
-                                        {secret.key}
-                                    </div>
-                                    <div className="flex items-center gap-2 bg-gray-900 px-2 py-1 rounded border border-gray-800 max-w-[200px]">
-                                        <span className="font-mono text-xs text-gray-300 truncate">
-                                            {showValues[index] ? secret.value : '••••••••••••••••'}
-                                        </span>
-                                        <button
-                                            onClick={() => setShowValues(prev => ({ ...prev, [index]: !prev[index] }))}
-                                            className="text-gray-500 hover:text-white transition-colors"
-                                        >
-                                            {showValues[index] ? <EyeOff size={12} /> : <Eye size={12} />}
-                                        </button>
-                                    </div>
-                                    <button
-                                        onClick={() => removeSecret(index)}
-                                        className="p-2 text-gray-500 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                                    >
-                                        <Trash2 size={16} />
-                                    </button>
-                                </div>
-                            ))
-                        )}
-                    </div>
+                <div className="flex gap-2 mb-4">
+                  <input
+                    type="text"
+                    placeholder="KEY (e.g. GITHUB_TOKEN)"
+                    value={newKey}
+                    onChange={(e) => setNewKey(e.target.value)}
+                    className="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                  />
+                  <input
+                    type="password"
+                    placeholder="VALUE"
+                    value={newValue}
+                    onChange={(e) => setNewValue(e.target.value)}
+                    className="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
+                  />
+                  <button
+                    onClick={addSecret}
+                    disabled={!newKey.trim()}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors flex items-center gap-2"
+                  >
+                    <Plus size={16} />
+                    Add
+                  </button>
                 </div>
-            )}
+              </div>
 
-            {activeTab === 'github' && (
-                <div className="space-y-6">
-                    <div className="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
-                         <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
-                            <Github className="text-white" size={20} />
-                            Push to GitHub
-                        </h3>
-                        <p className="text-sm text-gray-400 mb-4">
-                            Commit and push your changes directly to a GitHub repository.
-                            Requires <code>GITHUB_TOKEN</code> in secrets.
-                        </p>
-
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-xs font-medium text-gray-500 mb-1">Repository (username/repo)</label>
-                                <input
-                                    type="text"
-                                    placeholder="e.g. jules/my-app"
-                                    value={repoName}
-                                    onChange={(e) => setRepoName(e.target.value)}
-                                    className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-xs font-medium text-gray-500 mb-1">Branch</label>
-                                <input
-                                    type="text"
-                                    placeholder="main"
-                                    value={branch}
-                                    onChange={(e) => setBranch(e.target.value)}
-                                    className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                                />
-                            </div>
-                            <div>
-                                <label className="block text-xs font-medium text-gray-500 mb-1">Commit Message</label>
-                                <input
-                                    type="text"
-                                    placeholder="Update from Open Lovable Builder"
-                                    value={commitMessage}
-                                    onChange={(e) => setCommitMessage(e.target.value)}
-                                    className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none"
-                                />
-                            </div>
-
-                            <button
-                                onClick={handleGitHubPush}
-                                disabled={isPushing || !repoName || !branch}
-                                className="w-full py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 border border-gray-700"
-                            >
-                                {isPushing ? <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" /> : <Github size={16} />}
-                                {isPushing ? 'Pushing...' : 'Push Changes'}
-                            </button>
-
-                            {pushStatus && (
-                                <div className={`p-3 rounded border text-sm ${pushStatus.success ? 'bg-green-900/20 border-green-800 text-green-400' : 'bg-red-900/20 border-red-800 text-red-400'}`}>
-                                    {pushStatus.message}
-                                    {pushStatus.success && pushStatus.message.includes('http') && (
-                                         <a href={pushStatus.message.split('to ')[1]} target="_blank" rel="noopener noreferrer" className="underline ml-1">View on GitHub</a>
-                                    )}
-                                </div>
-                            )}
-                        </div>
+              <div className="space-y-2">
+                {secrets.length === 0 ? (
+                  <div className="text-center text-gray-500 py-4">No user secrets added yet.</div>
+                ) : (
+                  secrets.map((secret, index) => (
+                    <div key={index} className="flex items-center gap-2 bg-gray-800/50 p-3 rounded border border-gray-800 group hover:border-gray-700 transition-colors">
+                      <div className="flex-1 font-mono text-sm text-blue-400 truncate" title={secret.key}>
+                        {secret.key}
+                      </div>
+                      <div className="flex items-center gap-2 bg-gray-900 px-2 py-1 rounded border border-gray-800 max-w-[200px]">
+                        <span className="font-mono text-xs text-gray-300 truncate">
+                          {showValues[index] ? secret.value : '••••••••••••••••'}
+                        </span>
+                        <button
+                          onClick={() => setShowValues(prev => ({ ...prev, [index]: !prev[index] }))}
+                          className="text-gray-500 hover:text-white transition-colors"
+                        >
+                          {showValues[index] ? <EyeOff size={12} /> : <Eye size={12} />}
+                        </button>
+                      </div>
+                      <button
+                        onClick={() => removeSecret(index)}
+                        className="p-2 text-gray-500 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
+                      >
+                        <Trash2 size={16} />
+                      </button>
                     </div>
+                  ))
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* GitHub tab */}
+          {activeTab === 'github' && (
+            <div className="space-y-6">
+              <div className="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
+                <h3 className="text-lg font-semibold text-white mb-2 flex items-center gap-2">
+                  <Github className="text-white" size={20} />
+                  Push to GitHub
+                </h3>
+                <p className="text-sm text-gray-400 mb-4">
+                  Commit and push your changes directly to a GitHub repository.
+                  Requires <code>GITHUB_TOKEN</code> in secrets.
+                </p>
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Repository (username/repo)</label>
+                    <input type="text" placeholder="e.g. jules/my-app" value={repoName} onChange={(e) => setRepoName(e.target.value)}
+                      className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Branch</label>
+                    <input type="text" placeholder="main" value={branch} onChange={(e) => setBranch(e.target.value)}
+                      className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none" />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">Commit Message</label>
+                    <input type="text" value={commitMessage} onChange={(e) => setCommitMessage(e.target.value)}
+                      className="w-full bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 focus:outline-none" />
+                  </div>
+                  <button onClick={handleGitHubPush} disabled={isPushing || !repoName || !branch}
+                    className="w-full py-2 bg-gray-800 hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-lg text-sm font-medium transition-colors flex items-center justify-center gap-2 border border-gray-700">
+                    {isPushing ? <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent" /> : <Github size={16} />}
+                    {isPushing ? 'Pushing...' : 'Push Changes'}
+                  </button>
+                  {pushStatus && (
+                    <div className={`p-3 rounded border text-sm ${pushStatus.success ? 'bg-green-900/20 border-green-800 text-green-400' : 'bg-red-900/20 border-red-800 text-red-400'}`}>
+                      {pushStatus.message}
+                    </div>
+                  )}
                 </div>
-            )}
+              </div>
+            </div>
+          )}
 
-            {activeTab === 'deploy' && (
-                <DeployManager />
-            )}
+          {/* Deploy tab */}
+          {activeTab === 'deploy' && (
+            <DeployManager files={files} projectId={projectId} />
+          )}
 
-            {activeTab === 'analytics' && (
-                <div className="space-y-6">
-                    {/* Date range picker */}
-                    <div className="flex items-center gap-3 flex-wrap">
-                        <div className="flex items-center gap-2">
-                            <label className="text-xs text-zinc-500">From</label>
-                            <input
-                                type="date"
-                                value={dateRange.start}
-                                onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
-                                className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none"
-                            />
-                        </div>
-                        <div className="flex items-center gap-2">
-                            <label className="text-xs text-zinc-500">To</label>
-                            <input
-                                type="date"
-                                value={dateRange.end}
-                                onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
-                                className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none"
-                            />
-                        </div>
-                        <div className="flex gap-1">
-                            {[7, 30, 90].map(d => (
-                                <button
-                                    key={d}
-                                    onClick={() => setQuickRange(d)}
-                                    className="px-2 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 rounded transition-colors"
-                                >
-                                    {d}D
-                                </button>
-                            ))}
-                        </div>
-                    </div>
+          {/* Domains tab */}
+          {activeTab === 'domains' && (
+            <DomainsPanel projectId={projectId} />
+          )}
 
-                    {/* Traffic charts */}
-                    <TrafficCharts projectId={projectId} dateRange={dateRange} />
+          {/* Email tab */}
+          {activeTab === 'email' && (
+            <EmailPanel projectId={projectId} />
+          )}
 
-                    {/* Lighthouse + Top Pages */}
-                    <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
-                        <div className="lg:col-span-3">
-                            <h3 className="text-sm font-medium text-zinc-300 mb-3">Performance Audit</h3>
-                            <LighthousePanel projectId={projectId} />
-                        </div>
-                        <div className="lg:col-span-2">
-                            <h3 className="text-sm font-medium text-zinc-300 mb-3">Top Pages & Speed</h3>
-                            <TopPagesTable projectId={projectId} dateRange={dateRange} />
-                        </div>
-                    </div>
+          {/* Analytics tab */}
+          {activeTab === 'analytics' && (
+            <div className="space-y-6">
+              <div className="flex items-center gap-3 flex-wrap">
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-zinc-500">From</label>
+                  <input type="date" value={dateRange.start} onChange={(e) => setDateRange(prev => ({ ...prev, start: e.target.value }))}
+                    className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none" />
                 </div>
-            )}
-
-            {activeTab === 'database' && (
-                <div>
-                    {/* Sub-tab bar */}
-                    <div className="flex gap-1 border-b border-zinc-700 mb-4 overflow-x-auto pb-px">
-                        {DB_SUB_TABS.map((tab) => (
-                            <button
-                                key={tab.id}
-                                onClick={() => setDbSubTab(tab.id)}
-                                className={`px-3 py-1.5 text-xs font-medium whitespace-nowrap transition-colors border-b-2 -mb-px ${dbSubTab === tab.id ? 'border-blue-500 text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'}`}
-                            >
-                                {tab.label}
-                            </button>
-                        ))}
-                    </div>
-
-                    {/* Sub-tab content */}
-                    <div>
-                        {dbSubTab === 'overview' && <DatabaseOverview projectId={projectId} />}
-                        {dbSubTab === 'schema' && <SchemaViewer />}
-                        {dbSubTab === 'users' && <UsersManager />}
-                        {dbSubTab === 'sql' && <SQLEditor />}
-                        {dbSubTab === 'functions' && <EdgeFunctionsPanel fileTree={fileTree} />}
-                        {dbSubTab === 'logs' && <LogsViewer />}
-                        {dbSubTab === 'secrets' && <SecretsPanel projectId={projectId} />}
-                        {dbSubTab === 'usage' && <UsagePanel />}
-                    </div>
+                <div className="flex items-center gap-2">
+                  <label className="text-xs text-zinc-500">To</label>
+                  <input type="date" value={dateRange.end} onChange={(e) => setDateRange(prev => ({ ...prev, end: e.target.value }))}
+                    className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-200 focus:outline-none" />
                 </div>
-            )}
+                <div className="flex gap-1">
+                  {[7, 30, 90].map(d => (
+                    <button key={d} onClick={() => setQuickRange(d)}
+                      className="px-2 py-1 text-xs bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 text-zinc-300 rounded transition-colors">
+                      {d}D
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <TrafficCharts projectId={projectId} dateRange={dateRange} />
+              <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+                <div className="lg:col-span-3">
+                  <h3 className="text-sm font-medium text-zinc-300 mb-3">Performance Audit</h3>
+                  <LighthousePanel projectId={projectId} />
+                </div>
+                <div className="lg:col-span-2">
+                  <h3 className="text-sm font-medium text-zinc-300 mb-3">Top Pages & Speed</h3>
+                  <TopPagesTable projectId={projectId} dateRange={dateRange} />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Database tab */}
+          {activeTab === 'database' && (
+            <div>
+              {/* Provision Database button */}
+              {projectId && hasProjectDb === false && (
+                <div className="bg-zinc-800/50 border border-zinc-700 rounded-xl p-4 mb-4 flex items-center justify-between">
+                  <div>
+                    <p className="text-sm font-medium text-zinc-200">Provision a dedicated database</p>
+                    <p className="text-xs text-zinc-500 mt-0.5">Create an isolated Supabase instance for this project.</p>
+                  </div>
+                  <button
+                    onClick={handleProvisionDB}
+                    disabled={isProvisioning}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-sm font-medium transition-colors flex items-center gap-2 shrink-0"
+                  >
+                    {isProvisioning ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+                    {isProvisioning ? provisionStage || 'Provisioning...' : 'Provision Database'}
+                  </button>
+                </div>
+              )}
+
+              {hasProjectDb && provisionedUrl && (
+                <div className="bg-emerald-900/20 border border-emerald-700/40 rounded-xl p-3 mb-4 flex items-center gap-2 text-sm">
+                  <CheckCircle size={14} className="text-emerald-400 shrink-0" />
+                  <span className="text-emerald-300">Project database active:</span>
+                  <code className="text-emerald-400 text-xs">{provisionedUrl}</code>
+                </div>
+              )}
+
+              {/* Sub-tab bar */}
+              <div className="flex gap-1 border-b border-zinc-700 mb-4 overflow-x-auto pb-px">
+                {DB_SUB_TABS.map((tab) => (
+                  <button
+                    key={tab.id}
+                    onClick={() => setDbSubTab(tab.id)}
+                    className={`px-3 py-1.5 text-xs font-medium whitespace-nowrap transition-colors border-b-2 -mb-px ${dbSubTab === tab.id ? 'border-blue-500 text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'}`}
+                  >
+                    {tab.label}
+                  </button>
+                ))}
+              </div>
+
+              <div>
+                {dbSubTab === 'overview' && <DatabaseOverview projectId={projectId} />}
+                {dbSubTab === 'schema' && <SchemaViewer projectId={projectId} />}
+                {dbSubTab === 'users' && <UsersManager />}
+                {dbSubTab === 'sql' && <SQLEditor projectId={projectId} />}
+                {dbSubTab === 'functions' && <EdgeFunctionsPanel fileTree={fileTree} />}
+                {dbSubTab === 'logs' && <LogsViewer />}
+                {dbSubTab === 'secrets' && <SecretsPanel projectId={projectId} />}
+                {dbSubTab === 'usage' && <UsagePanel />}
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="flex justify-end gap-3 pt-4 border-t border-gray-800 mt-4">
-             {activeTab === 'secrets' && (
-                <button
-                    onClick={handleSaveSecrets}
-                    className="px-6 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium transition-colors flex items-center gap-2 shadow-lg shadow-green-900/20"
-                >
-                    <Save size={16} />
-                    Save Secrets
-                </button>
-             )}
+          {activeTab === 'secrets' && (
             <button
-                onClick={onClose}
-                className="px-4 py-2 text-gray-400 hover:text-white text-sm font-medium transition-colors"
+              onClick={handleSaveSecrets}
+              className="px-6 py-2 bg-green-600 hover:bg-green-500 text-white rounded text-sm font-medium transition-colors flex items-center gap-2 shadow-lg shadow-green-900/20"
             >
-                Close
+              <Save size={16} />
+              Save Secrets
             </button>
+          )}
+          <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white text-sm font-medium transition-colors">
+            Close
+          </button>
         </div>
       </div>
     </div>

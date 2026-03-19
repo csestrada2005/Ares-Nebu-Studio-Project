@@ -12,6 +12,7 @@ import AIStudioPage from './pages/AIStudioPage';
 import DealsPage from './pages/DealsPage';
 import { Login } from './components/auth/Login';
 import ForgeDashboard from './pages/ForgeDashboard';
+import ProjectHubPage from './pages/ProjectHubPage';
 import { ProtectedRoute } from './components/auth/ProtectedRoute';
 
 function App() {
@@ -37,6 +38,7 @@ function App() {
         <Route element={<StudioLayout />}>
           <Route path="forge" element={<ProtectedRoute><ForgeDashboard /></ProtectedRoute>} />
           <Route path="studio/:projectId" element={<StudioEngine />} />
+          <Route path="projects/:projectId/hub" element={<ProtectedRoute><ProjectHubPage /></ProtectedRoute>} />
         </Route>
       </Routes>
     </BrowserRouter>

@@ -670,7 +670,7 @@ export function StudioEngine() {
           </CommandModal>
         )}
 
-        {showSettings && <SettingsModal onClose={() => setShowSettings(false)} fileTree={fileTree} />}
+        {showSettings && <SettingsModal onClose={() => setShowSettings(false)} fileTree={fileTree} files={files} />}
         {showGraph && <StateGraph fileTree={fileTree} onClose={() => setShowGraph(false)} />}
 
         <HistoryDrawer

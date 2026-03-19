@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { ChevronRight } from 'lucide-react';
 import { SupabaseService } from '@/services/SupabaseService';
+import { projectDBService } from '@/services/ProjectDBService';
 
 interface Column {
   table_name: string;
@@ -14,7 +15,12 @@ interface TableGroup {
   columns: Column[];
 }
 
-export function SchemaViewer() {
+interface SchemaViewerProps {
+  projectId?: string | null;
+}
+
+export function SchemaViewer({ projectId }: SchemaViewerProps = {}) {
+  const resolvedProjectId = projectId ?? sessionStorage.getItem('forge_project_id');
   const [tables, setTables] = useState<TableGroup[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -25,30 +31,41 @@ export function SchemaViewer() {
     const load = async () => {
       setIsLoading(true);
       try {
-        const supabase = SupabaseService.getInstance().client;
-        const { data, error: qError } = await supabase
-          .from('information_schema.columns')
-          .select('table_name, column_name, data_type, is_nullable')
-          .eq('table_schema', 'public')
-          .order('table_name')
-          .order('ordinal_position');
+        let columns: Column[] = [];
 
-        if (qError) {
-          if (qError.message?.includes('permission') || qError.code === '42501') {
-            setError('Schema access requires service role key. Add SUPABASE_SERVICE_ROLE_KEY to your project secrets.');
-          } else {
-            setError(qError.message);
+        if (resolvedProjectId) {
+          // Use project-scoped DB via server API
+          const { data, error: qError } = await projectDBService.getSchema(resolvedProjectId);
+          if (qError) throw new Error(String(qError));
+          columns = Array.isArray(data) ? data : [];
+        } else {
+          // Fall back to main Supabase client
+          const supabase = SupabaseService.getInstance().client;
+          const { data, error: qError } = await supabase
+            .from('information_schema.columns')
+            .select('table_name, column_name, data_type, is_nullable')
+            .eq('table_schema', 'public')
+            .order('table_name')
+            .order('ordinal_position');
+
+          if (qError) {
+            if (qError.message?.includes('permission') || qError.code === '42501') {
+              setError('Schema access requires service role key. Add SUPABASE_SERVICE_ROLE_KEY to your project secrets.');
+            } else {
+              setError(qError.message);
+            }
+            return;
           }
-          return;
+          columns = data ?? [];
         }
 
         // Group by table
         const grouped: Record<string, Column[]> = {};
-        for (const col of (data ?? [])) {
+        for (const col of columns) {
           if (!grouped[col.table_name]) grouped[col.table_name] = [];
           grouped[col.table_name].push(col);
         }
-        setTables(Object.entries(grouped).map(([name, columns]) => ({ name, columns })));
+        setTables(Object.entries(grouped).map(([name, cols]) => ({ name, columns: cols })));
       } catch (e: any) {
         setError(e.message ?? 'Unknown error');
       } finally {
@@ -56,7 +73,7 @@ export function SchemaViewer() {
       }
     };
     load();
-  }, []);
+  }, [resolvedProjectId]);
 
   const filtered = tables.filter(t => t.name.toLowerCase().includes(search.toLowerCase()));
 
