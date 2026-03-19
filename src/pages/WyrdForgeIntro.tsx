@@ -48,7 +48,7 @@ const ForgeReveal = () => {
 
   return (
     <div className="relative select-none flex flex-col items-center">
-      <div className="relative inline-block text-center" style={{ fontSize: "clamp(2.4rem, 10vw, 7rem)", lineHeight: 1 }}>
+      <div className="relative inline-block text-center" style={{ fontSize: "clamp(1.92rem, 8vw, 5.6rem)", lineHeight: 1 }}>
         <span className="font-display block text-white/10 tracking-tighter">WYRD FORGE</span>
         <motion.div
           className="absolute top-0 left-0 h-full w-full overflow-hidden"
@@ -61,7 +61,7 @@ const ForgeReveal = () => {
       </div>
 
       <div className="w-full flex justify-center -mt-2 sm:-mt-4 z-10">
-        <svg viewBox="0 0 600 22" className="w-[80%] max-w-[720px]">
+        <svg viewBox="0 0 600 22" className="w-[80%] max-w-[576px]">
           <motion.path d={pathMain} stroke="#E60000" strokeWidth="3.8" fill="none" initial={{ pathLength: 0, opacity: 0 }} animate={phase >= 3 ? { pathLength: 1, opacity: 0.8 } : { pathLength: 0, opacity: 0 }} transition={{ duration: 0.6 }} />
           <motion.path d={pathThin} stroke="#E60000" strokeWidth="1.6" fill="none" initial={{ pathLength: 0, opacity: 0 }} animate={phase >= 3 ? { pathLength: 1, opacity: 0.4 } : { pathLength: 0, opacity: 0 }} transition={{ duration: 0.7, delay: 0.1 }} />
         </svg>
@@ -103,7 +103,7 @@ export const WyrdForgeIntro = () => {
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_80%_at_50%_50%,transparent_40%,rgba(10,10,10,0.85)_100%)] pointer-events-none" />
 
       <div className="relative z-10 flex flex-col items-center px-6">
-        <img src="/wyrd-logo.png" alt="Wyrd Forge" className="w-20 sm:w-28 mb-10 opacity-90 drop-shadow-2xl" />
+        <img src="/wyrd-logo.png" alt="Wyrd Forge" className="w-40 sm:w-56 mb-10 opacity-90 drop-shadow-2xl" />
 
         <ForgeReveal />
 
