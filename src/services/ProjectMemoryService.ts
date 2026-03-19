@@ -188,6 +188,48 @@ export class ProjectMemoryService {
     return memory;
   }
 
+  static async getProjectSummary(projectId: string): Promise<{
+    componentCount: number;
+    routeCount: number;
+    lastUpdated: string;
+    techStack: string[];
+  } | null> {
+    try {
+      const cached = memoryCache.get(projectId);
+      if (cached && Date.now() < cached.expires) {
+        return {
+          componentCount: cached.memory.component_registry.length,
+          routeCount: cached.memory.route_map.length,
+          lastUpdated: cached.memory.updated_at,
+          techStack: Object.keys(cached.memory.tech_stack),
+        };
+      }
+
+      const supabase = SupabaseService.getInstance().client;
+      const { data, error } = await supabase
+        .from('forge_project_memory')
+        .select('component_registry, route_map, tech_stack, updated_at')
+        .eq('project_id', projectId)
+        .single();
+
+      if (error || !data) return null;
+
+      const techStackObj = data.tech_stack as Record<string, string>;
+      const componentRegistry = data.component_registry as ComponentEntry[];
+      const routeMap = data.route_map as RouteEntry[];
+
+      return {
+        componentCount: Array.isArray(componentRegistry) ? componentRegistry.length : 0,
+        routeCount: Array.isArray(routeMap) ? routeMap.length : 0,
+        lastUpdated: data.updated_at as string,
+        techStack: techStackObj ? Object.keys(techStackObj) : [],
+      };
+    } catch (e) {
+      console.error('[ProjectMemoryService] getProjectSummary error:', e);
+      return null;
+    }
+  }
+
   static async buildFromFiles(
     projectId: string,
     files: Map<string, string>
@@ -255,7 +297,7 @@ export class ProjectMemoryService {
     await this.save(projectId, existing);
   }
 
-  static formatForPrompt(memory: ProjectMemory): string {
+  static formatForPrompt(memory: ProjectMemory, maxChars: number = 6000): string {
     const lines: string[] = ['=== PROJECT MEMORY ==='];
 
     // Tech stack (names only, no versions)
@@ -276,41 +318,58 @@ export class ProjectMemoryService {
       }
     }
 
+    // Calculate how much we have so far
+    let currentLength = lines.join('\n').length;
+
+    // Optional parts below - truncate from bottom if over maxChars
+    const optionalParts: string[] = [];
+
     // Routes
     if (memory.route_map.length > 0) {
-      lines.push('ROUTES:');
+      const routeLines = ['ROUTES:'];
       for (const r of memory.route_map) {
-        lines.push(`  ${r.path} → <${r.component}>`);
+        routeLines.push(`  ${r.path} → <${r.component}>`);
       }
+      optionalParts.push(routeLines.join('\n'));
     }
 
     // Design tokens (top 10)
     const tokenEntries = Object.entries(memory.design_tokens).slice(0, 10);
     if (tokenEntries.length > 0) {
-      lines.push('DESIGN TOKENS:');
+      const tokenLines = ['DESIGN TOKENS:'];
       for (const [k, v] of tokenEntries) {
-        lines.push(`  ${k}: ${v}`);
+        tokenLines.push(`  ${k}: ${v}`);
       }
+      optionalParts.push(tokenLines.join('\n'));
     }
 
     // DB schema (truncated)
     if (memory.database_schema) {
-      lines.push('DB SCHEMA (excerpt):');
-      lines.push(memory.database_schema.slice(0, 400));
+      const dbLines = ['DB SCHEMA (excerpt):'];
+      dbLines.push(memory.database_schema.slice(0, 400));
+      optionalParts.push(dbLines.join('\n'));
     }
 
     // Last 3 actions
     if (memory.last_10_actions.length > 0) {
-      lines.push('RECENT ACTIONS:');
+      const actionLines = ['RECENT ACTIONS:'];
       for (const a of memory.last_10_actions.slice(0, 3)) {
-        lines.push(`  [${a.outcome}] ${a.action}`);
+        actionLines.push(`  [${a.outcome}] ${a.action}`);
       }
+      optionalParts.push(actionLines.join('\n'));
+    }
+
+    for (const part of optionalParts) {
+      if (currentLength + part.length + 100 > maxChars) {
+        break; // Stop adding parts if we would exceed limits
+      }
+      lines.push(part);
+      currentLength += part.length + 1;
     }
 
     lines.push('=== END MEMORY ===');
 
-    // ~4 chars per token, target 2000 tokens = 8000 chars
-    return lines.join('\n').slice(0, 8000);
+    return lines.join('\n').slice(0, maxChars);
   }
 
   // -------------------------------------------------------------------------
@@ -319,7 +378,15 @@ export class ProjectMemoryService {
 
   private static async save(projectId: string, memory: ProjectMemory): Promise<void> {
     const supabase = SupabaseService.getInstance().client;
-    const payload = { ...memory, updated_at: new Date().toISOString() };
+
+    // ensure no separate id field in payload
+    const { ...memoryData } = memory;
+    if ('id' in memoryData) {
+      delete (memoryData as any).id;
+    }
+
+    const payload = { ...memoryData, updated_at: new Date().toISOString() };
+
     await supabase
       .from('forge_project_memory')
       .upsert(payload, { onConflict: 'project_id' });

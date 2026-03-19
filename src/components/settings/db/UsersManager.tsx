@@ -11,13 +11,6 @@ interface Profile {
   created_at: string;
 }
 
-const ROLE_COLORS: Record<string, string> = {
-  admin: 'bg-red-600/20 text-red-400 border-red-600/30',
-  dev: 'bg-blue-600/20 text-blue-400 border-blue-600/30',
-  vendedor: 'bg-amber-600/20 text-amber-400 border-amber-600/30',
-  cliente: 'bg-emerald-600/20 text-emerald-400 border-emerald-600/30',
-};
-
 const ROLES = ['admin', 'dev', 'vendedor', 'cliente'];
 
 function getInitials(name: string | null): string {

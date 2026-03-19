@@ -24,17 +24,28 @@ export class Architect {
     intent: Intent
   ): Promise<BuildStep[]> {
     const systemPrompt = `You are a software architect for a React + TypeScript + Tailwind web builder.
-
 Do not write any code. Return only a JSON array of BuildStep objects.
-
 Each BuildStep must have exactly these fields:
-- order: number (starting at 1, incrementing by 1)
-- description: string (plain English description of what this step does, no code)
-- file_path: string (the exact file path to create or modify, e.g. "src/components/Foo.tsx")
-- action: "create" | "modify" | "delete"
-- requires_steps: number[] (orders of steps that must complete before this one; empty array if none)
 
-Return ONLY a valid JSON array. No markdown fences, no explanation before or after the array.`;
+order: number (starting at 1)
+description: string (what the file will DO after the change, not what action you take. Bad: "Update Dashboard.tsx". Good: "Dashboard showing monthly revenue chart and active projects KPI cards")
+file_path: string (exact path e.g. "src/components/Foo.tsx")
+action: "create" | "modify" | "delete"
+requires_steps: number[] (empty array if no dependencies)
+
+PLANNING RULES — follow these exactly:
+
+Maximum 6 steps for any request. If you think you need more, consolidate.
+Minimum 1 step. Never return an empty array.
+One step = one file. Never put two different file paths in one step.
+Purely cosmetic changes (color, text, spacing): return exactly 1 step.
+New page: 2-4 steps maximum (page component + sub-components + router update).
+Do not create test files, story files, or documentation files unless explicitly asked.
+Do not modify package.json, vite.config.ts, tsconfig.json, or any config file unless the user explicitly asks to add a dependency or change build configuration.
+If the user asks to fix something, only modify files that contain the bug.
+Every step description must explain what the file will contain after the change.
+
+Return ONLY a valid JSON array. No markdown fences, no explanation before or after.`;
 
     const userMessage =
       `${memoryFormatted}\n\n` +
@@ -64,21 +75,37 @@ Return ONLY a valid JSON array. No markdown fences, no explanation before or aft
 
       const text: string = data.content?.[0]?.text ?? '';
       const cleaned = this.extractJsonArray(text);
-      const steps = JSON.parse(cleaned) as BuildStep[];
+      let steps = JSON.parse(cleaned) as BuildStep[];
 
       if (!Array.isArray(steps)) return [];
 
+      let trimmed = false;
+      if (steps.length > 6) {
+        steps = steps.slice(0, 6);
+        trimmed = true;
+      }
+
+      if (trimmed) {
+        console.warn(`[Architect] Plan trimmed from ${JSON.parse(cleaned).length} to 6 steps`);
+      }
+
       return steps
-        .filter(s => s.order && s.file_path && s.action && s.description)
-        .map(s => ({
-          order: Number(s.order),
-          description: String(s.description),
-          file_path: String(s.file_path),
-          action: s.action,
-          requires_steps: Array.isArray(s.requires_steps)
-            ? s.requires_steps.map(Number)
-            : [],
-        }));
+        .filter(s => s.file_path && s.file_path.trim() !== '')
+        .map(s => {
+          let desc = s.description;
+          if (!desc || desc.trim() === '') {
+            desc = `Update ${s.file_path}`;
+          }
+          return {
+            order: Number(s.order),
+            description: String(desc),
+            file_path: String(s.file_path),
+            action: s.action,
+            requires_steps: Array.isArray(s.requires_steps)
+              ? s.requires_steps.map(Number)
+              : [],
+          };
+        });
     } catch (e) {
       console.error('[Architect] Failed to plan:', e);
       return [];

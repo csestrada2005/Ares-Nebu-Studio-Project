@@ -26,12 +26,6 @@ interface AnalyticsRow {
   bounce_rate: number;
 }
 
-function formatDuration(seconds: number): string {
-  const m = Math.floor(seconds / 60);
-  const s = seconds % 60;
-  return `${m}m ${s}s`;
-}
-
 function formatDate(d: string): string {
   return new Date(d).toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
 }

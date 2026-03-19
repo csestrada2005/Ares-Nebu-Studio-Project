@@ -16,6 +16,7 @@ export interface UseProjectFilesReturn {
   saveFile: (path: string, content: string) => Promise<void>;
   deleteFile: (path: string) => Promise<void>;
   updateLocalFile: (path: string, content: string) => void;
+  flushPendingWrites: () => Promise<void>;
 }
 
 export function useProjectFiles(): UseProjectFilesReturn {
@@ -25,6 +26,9 @@ export function useProjectFiles(): UseProjectFilesReturn {
   // Store the active project id so that saveFile / deleteFile can use it
   // without needing it passed as a parameter every time.
   const activeProjectId = useRef<string | null>(null);
+
+  const debounceTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const pendingWrites = useRef<Map<string, string>>(new Map());
 
   const supabase = SupabaseService.getInstance().client;
 
@@ -68,16 +72,71 @@ export function useProjectFiles(): UseProjectFilesReturn {
     // Optimistically update local state first
     setFiles(prev => new Map(prev).set(path, content));
 
-    const { error } = await supabase
-      .from('forge_files')
-      .upsert(
-        { project_id: projectId, path, content },
-        { onConflict: 'project_id,path' }
-      );
+    pendingWrites.current.set(path, content);
 
-    if (error) {
-      console.error('[useProjectFiles] Failed to save file:', path, error);
+    const existingTimer = debounceTimers.current.get(path);
+    if (existingTimer) {
+      clearTimeout(existingTimer);
     }
+
+    const timer = setTimeout(async () => {
+      debounceTimers.current.delete(path);
+      pendingWrites.current.delete(path);
+
+      const { error } = await supabase
+        .from('forge_files')
+        .upsert(
+          { project_id: projectId, path, content },
+          { onConflict: 'project_id,path' }
+        );
+
+      if (error) {
+        console.error('[useProjectFiles] Failed to save file:', path, error);
+      } else {
+        if ((path.endsWith('.tsx') || path.endsWith('.ts')) && (path.startsWith('src/components/') || path.startsWith('src/pages/'))) {
+          window.dispatchEvent(new CustomEvent('forge:file-saved', {
+            detail: { path, projectId: activeProjectId.current }
+          }));
+        }
+      }
+    }, 1500);
+
+    debounceTimers.current.set(path, timer);
+  }, [supabase]);
+
+  const flushPendingWrites = useCallback(async (): Promise<void> => {
+    const promises: Promise<void>[] = [];
+    const projectId = activeProjectId.current;
+    if (!projectId) return;
+
+    for (const [path, timer] of debounceTimers.current.entries()) {
+      clearTimeout(timer);
+      const content = pendingWrites.current.get(path);
+      if (content !== undefined) {
+        promises.push(
+          (async () => {
+            const { error } = await supabase
+              .from('forge_files')
+              .upsert(
+                { project_id: projectId, path, content },
+                { onConflict: 'project_id,path' }
+              );
+            if (error) {
+              console.error('[useProjectFiles] Failed to save file on flush:', path, error);
+            } else {
+              if ((path.endsWith('.tsx') || path.endsWith('.ts')) && (path.startsWith('src/components/') || path.startsWith('src/pages/'))) {
+                window.dispatchEvent(new CustomEvent('forge:file-saved', {
+                  detail: { path, projectId: activeProjectId.current }
+                }));
+              }
+            }
+          })()
+        );
+      }
+    }
+    debounceTimers.current.clear();
+    pendingWrites.current.clear();
+    await Promise.all(promises);
   }, [supabase]);
 
   /** Delete a file from Supabase and remove it from the local Map. */
@@ -111,5 +170,5 @@ export function useProjectFiles(): UseProjectFilesReturn {
     setFiles(prev => new Map(prev).set(path, content));
   }, []);
 
-  return { files, isLoading, loadFromSupabase, saveFile, deleteFile, updateLocalFile };
+  return { files, isLoading, loadFromSupabase, saveFile, deleteFile, updateLocalFile, flushPendingWrites };
 }
