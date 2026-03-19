@@ -1,5 +1,5 @@
 import { useState, useEffect } from "react";
-import { Layers, Flame, Plus, Search, Settings, LogOut, Trash2, Loader2 } from "lucide-react";
+import { Layers, Flame, Plus, Search, Settings, LogOut, Trash2, Loader2, LayoutDashboard } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { SupabaseService } from "@/services/SupabaseService";
 import { useAuth } from "@/contexts/AuthContext";
@@ -10,6 +10,7 @@ interface ForgeProject {
   description: string | null;
   created_at: string;
   updated_at: string;
+  deployment_url: string | null;
 }
 
 const ForgeDashboard = () => {
@@ -24,7 +25,6 @@ const ForgeDashboard = () => {
 
   const supabase = SupabaseService.getInstance().client;
 
-  // Fetch projects on mount
   useEffect(() => {
     if (!user) return;
     const fetchProjects = async () => {
@@ -32,7 +32,7 @@ const ForgeDashboard = () => {
       try {
         const { data, error } = await supabase
           .from("forge_projects")
-          .select("id, name, description, created_at, updated_at")
+          .select("id, name, description, created_at, updated_at, deployment_url")
           .eq("user_id", user.id)
           .order("updated_at", { ascending: false });
         if (!error && data) {
@@ -72,6 +72,11 @@ const ForgeDashboard = () => {
     navigate(`/studio/${project.id}`);
   };
 
+  const openHub = (e: React.MouseEvent, project: ForgeProject) => {
+    e.stopPropagation();
+    navigate(`/projects/${project.id}/hub`);
+  };
+
   const deleteProject = async (e: React.MouseEvent, projectId: string) => {
     e.stopPropagation();
     if (!window.confirm("Delete this project? This cannot be undone.")) return;
@@ -95,7 +100,6 @@ const ForgeDashboard = () => {
     if (!forgeInput.trim()) return;
     const prompt = forgeInput.trim();
     const projectName = prompt.slice(0, 60);
-    // Create the project then navigate with the initial prompt in location state
     if (!user) return;
     setIsCreating(true);
     try {
@@ -226,12 +230,18 @@ const ForgeDashboard = () => {
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
                 {filteredProjects.map((project, i) => (
-                  <button
+                  <div
                     key={project.id}
+                    className="relative text-left rounded-xl border border-gray-800 bg-gray-900 p-4 transition-all duration-200 hover:border-red-500/40 hover:bg-gray-800/80 group cursor-pointer"
                     onClick={() => openProject(project)}
-                    className="relative text-left rounded-xl border border-gray-800 bg-gray-900 p-4 transition-all duration-200 hover:border-red-500/40 hover:scale-[1.02] hover:bg-gray-800/80 group"
                     style={{ animationDelay: `${i * 60}ms` }}
                   >
+                    {/* Deployment status dot */}
+                    <div
+                      className={`absolute top-3 left-3 w-2 h-2 rounded-full ${project.deployment_url ? 'bg-emerald-500' : 'bg-gray-600'}`}
+                      title={project.deployment_url ? 'Deployed' : 'Not deployed'}
+                    />
+
                     {/* Delete button */}
                     <button
                       onClick={(e) => deleteProject(e, project.id)}
@@ -241,10 +251,11 @@ const ForgeDashboard = () => {
                       <Trash2 size={14} />
                     </button>
 
-                    <div className="w-full h-32 rounded-lg mb-3 flex items-center justify-center bg-gray-800 group-hover:bg-gray-700 transition-colors">
+                    <div className="w-full h-24 rounded-lg mb-3 flex items-center justify-center bg-gray-800 group-hover:bg-gray-700 transition-colors">
                       <Layers size={24} className="text-gray-600 group-hover:text-gray-400 transition-colors" />
                     </div>
-                    <div className="flex items-start justify-between pr-2">
+
+                    <div className="flex items-start justify-between pr-2 mb-2">
                       <div className="min-w-0">
                         <h3 className="text-sm font-semibold text-white truncate">{project.name}</h3>
                         {project.description && (
@@ -252,10 +263,28 @@ const ForgeDashboard = () => {
                         )}
                       </div>
                     </div>
-                    <p className="text-[11px] mt-2 text-gray-600">
+
+                    <p className="text-[11px] text-gray-600 mb-3">
                       Updated {formatDate(project.updated_at)}
                     </p>
-                  </button>
+
+                    {/* Action buttons */}
+                    <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <button
+                        onClick={(e) => { e.stopPropagation(); openProject(project); }}
+                        className="flex-1 py-1.5 text-xs font-medium bg-red-600/20 hover:bg-red-600/40 text-red-400 rounded transition-colors"
+                      >
+                        Open
+                      </button>
+                      <button
+                        onClick={(e) => openHub(e, project)}
+                        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-gray-700 hover:bg-gray-600 text-gray-300 rounded transition-colors"
+                      >
+                        <LayoutDashboard size={11} />
+                        Hub
+                      </button>
+                    </div>
+                  </div>
                 ))}
               </div>
             )}

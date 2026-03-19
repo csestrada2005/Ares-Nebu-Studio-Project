@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Users, Briefcase, DollarSign, Clock, Loader2 } from "lucide-react";
+import { Users, Briefcase, DollarSign, Clock, Loader2, Flame, Zap, Globe } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
 import { getAdminKPIs, getRecentSignups, getActiveProjects } from "@/services/data/supabaseData";
 import { SupabaseService } from "@/services/SupabaseService";
@@ -42,6 +42,14 @@ const DEFAULT_KPIS: AdminKPIs = {
   pendingPayments: 0,
 };
 
+interface ForgeStats {
+  totalForgeProjects: number;
+  deployedProjects: number;
+  totalAICalls: number;
+  totalSnapshots: number;
+  mostActiveProjects: { name: string; ai_call_count: number; last_active_at: string }[];
+}
+
 const AdminDashboard = () => {
   const { lang } = useLanguage();
   const navigate = useNavigate();
@@ -50,6 +58,8 @@ const AdminDashboard = () => {
   const [recentSignups, setRecentSignups] = useState<Profile[]>([]);
   const [activeProjects, setActiveProjects] = useState<Project[]>([]);
   const [forgeVisitorsMTD, setForgeVisitorsMTD] = useState<number | string>('--');
+  const [forgeStats, setForgeStats] = useState<ForgeStats | null>(null);
+  const [forgeStatsLoading, setForgeStatsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -80,7 +90,7 @@ const AdminDashboard = () => {
             .gte('date', startOfMonth)
             .lt('date', startOfNextMonth);
           if (!cancelled && data) {
-            const total = data.reduce((s, r) => s + (r.visitors ?? 0), 0);
+            const total = data.reduce((s: number, r: any) => s + (r.visitors ?? 0), 0);
             setForgeVisitorsMTD(total);
           }
         } catch {
@@ -93,38 +103,70 @@ const AdminDashboard = () => {
       }
     };
     load();
-    return () => {
-      cancelled = true;
+    return () => { cancelled = true; };
+  }, []);
+
+  // Wyrd Forge platform stats
+  useEffect(() => {
+    let cancelled = false;
+    const loadForgeStats = async () => {
+      setForgeStatsLoading(true);
+      try {
+        const supabase = SupabaseService.getInstance().client;
+        const thirtyDaysAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+
+        const [
+          { count: totalForgeProjects },
+          { count: deployedProjects },
+          { data: aiCallsData },
+          { count: totalSnapshots },
+          { data: mostActiveProjects },
+        ] = await Promise.all([
+          supabase.from('forge_projects').select('*', { count: 'exact', head: true }),
+          supabase.from('forge_projects').select('*', { count: 'exact', head: true }).not('deployment_url', 'is', null),
+          supabase.from('forge_projects').select('ai_call_count'),
+          supabase.from('forge_snapshots').select('*', { count: 'exact', head: true }),
+          supabase.from('forge_projects')
+            .select('name, ai_call_count, last_active_at')
+            .gte('last_active_at', thirtyDaysAgo)
+            .order('last_active_at', { ascending: false })
+            .limit(5),
+        ]);
+
+        const totalAICalls = (aiCallsData ?? []).reduce((sum: number, p: any) => sum + (p.ai_call_count ?? 0), 0);
+
+        if (!cancelled) {
+          setForgeStats({
+            totalForgeProjects: totalForgeProjects ?? 0,
+            deployedProjects: deployedProjects ?? 0,
+            totalAICalls,
+            totalSnapshots: totalSnapshots ?? 0,
+            mostActiveProjects: mostActiveProjects ?? [],
+          });
+        }
+      } catch {
+        // forge_projects may not have all columns yet — fail gracefully
+      } finally {
+        if (!cancelled) setForgeStatsLoading(false);
+      }
     };
+    loadForgeStats();
+    return () => { cancelled = true; };
   }, []);
 
   const kpiCards = [
-    {
-      label: { es: "Total usuarios", en: "Total users" },
-      value: String(kpis.totalUsers),
-      icon: Users,
-    },
-    {
-      label: { es: "Proyectos activos", en: "Active projects" },
-      value: String(kpis.activeProjects),
-      icon: Briefcase,
-    },
-    {
-      label: { es: "Ingresos del mes", en: "Monthly revenue" },
-      value: formatCurrency(kpis.monthlyRevenue, lang),
-      icon: DollarSign,
-    },
-    {
-      label: { es: "Pagos pendientes", en: "Pending payments" },
-      value: formatCurrency(kpis.pendingPayments, lang),
-      icon: Clock,
-    },
-    {
-      label: { es: "Visitas Forge (mes)", en: "Site Visitors (MTD)" },
-      value: String(forgeVisitorsMTD),
-      icon: Users,
-    },
+    { label: { es: "Total usuarios", en: "Total users" }, value: String(kpis.totalUsers), icon: Users },
+    { label: { es: "Proyectos activos", en: "Active projects" }, value: String(kpis.activeProjects), icon: Briefcase },
+    { label: { es: "Ingresos del mes", en: "Monthly revenue" }, value: formatCurrency(kpis.monthlyRevenue, lang), icon: DollarSign },
+    { label: { es: "Pagos pendientes", en: "Pending payments" }, value: formatCurrency(kpis.pendingPayments, lang), icon: Clock },
+    { label: { es: "Visitas Forge (mes)", en: "Site Visitors (MTD)" }, value: String(forgeVisitorsMTD), icon: Users },
   ];
+
+  const formatDate = (iso: string | null) => {
+    if (!iso) return 'Never';
+    const d = new Date(iso);
+    return d.toLocaleDateString(lang === 'es' ? 'es-MX' : 'en-US', { day: 'numeric', month: 'short' });
+  };
 
   return (
     <div className="space-y-8 max-w-6xl">
@@ -134,9 +176,7 @@ const AdminDashboard = () => {
           {lang === "es" ? "Panel de Administración" : "Admin Dashboard"}
         </h1>
         <p className="text-sm mt-0.5 text-muted-foreground">
-          {lang === "es"
-            ? "Vista global del sistema"
-            : "System-wide overview"}
+          {lang === "es" ? "Vista global del sistema" : "System-wide overview"}
         </p>
       </div>
 
@@ -151,11 +191,7 @@ const AdminDashboard = () => {
               <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                 {kpi.label[lang]}
               </span>
-              <kpi.icon
-                size={15}
-                strokeWidth={1.5}
-                className="text-muted-foreground group-hover:text-primary transition-colors"
-              />
+              <kpi.icon size={15} strokeWidth={1.5} className="text-muted-foreground group-hover:text-primary transition-colors" />
             </div>
             {isLoading ? (
               <Loader2 size={20} className="animate-spin text-muted-foreground" />
@@ -187,31 +223,18 @@ const AdminDashboard = () => {
               <table className="w-full text-xs">
                 <thead>
                   <tr className="text-muted-foreground">
-                    <th className="text-left px-3 py-2 font-medium">
-                      {lang === "es" ? "Nombre" : "Name"}
-                    </th>
-                    <th className="text-left px-3 py-2 font-medium">
-                      {lang === "es" ? "Rol" : "Role"}
-                    </th>
-                    <th className="text-left px-3 py-2 font-medium">
-                      {lang === "es" ? "Fecha" : "Date"}
-                    </th>
+                    <th className="text-left px-3 py-2 font-medium">{lang === "es" ? "Nombre" : "Name"}</th>
+                    <th className="text-left px-3 py-2 font-medium">{lang === "es" ? "Rol" : "Role"}</th>
+                    <th className="text-left px-3 py-2 font-medium">{lang === "es" ? "Fecha" : "Date"}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border">
                   {recentSignups.map((p) => (
                     <tr key={p.id} className="hover:bg-muted/40 transition-colors">
-                      <td className="px-3 py-2.5 font-medium text-foreground">
-                        {p.full_name ?? "—"}
-                      </td>
+                      <td className="px-3 py-2.5 font-medium text-foreground">{p.full_name ?? "—"}</td>
+                      <td className="px-3 py-2.5 text-muted-foreground">{ROLE_LABELS[p.role]?.[lang] ?? p.role}</td>
                       <td className="px-3 py-2.5 text-muted-foreground">
-                        {ROLE_LABELS[p.role]?.[lang] ?? p.role}
-                      </td>
-                      <td className="px-3 py-2.5 text-muted-foreground">
-                        {new Date(p.created_at).toLocaleDateString(
-                          lang === "es" ? "es-MX" : "en-US",
-                          { day: "numeric", month: "short", year: "numeric" }
-                        )}
+                        {new Date(p.created_at).toLocaleDateString(lang === "es" ? "es-MX" : "en-US", { day: "numeric", month: "short", year: "numeric" })}
                       </td>
                     </tr>
                   ))}
@@ -246,24 +269,88 @@ const AdminDashboard = () => {
                     className="flex items-center justify-between px-3 py-3 rounded-lg hover:bg-muted/40 transition-colors cursor-pointer"
                   >
                     <div className="min-w-0">
-                      <p className="text-sm font-medium text-foreground truncate">
-                        {project.title}
-                      </p>
+                      <p className="text-sm font-medium text-foreground truncate">{project.title}</p>
                       <p className="text-[11px] text-muted-foreground mt-0.5">
-                        {new Date(project.created_at).toLocaleDateString(
-                          lang === "es" ? "es-MX" : "en-US",
-                          { day: "numeric", month: "short", year: "numeric" }
-                        )}
+                        {new Date(project.created_at).toLocaleDateString(lang === "es" ? "es-MX" : "en-US", { day: "numeric", month: "short", year: "numeric" })}
                       </p>
                     </div>
-                    <span
-                      className={`ml-3 shrink-0 text-[11px] font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[project.status]}`}
-                    >
+                    <span className={`ml-3 shrink-0 text-[11px] font-medium px-2 py-0.5 rounded-full ${STATUS_COLORS[project.status]}`}>
                       {STATUS_LABELS[project.status][lang]}
                     </span>
                   </li>
                 ))}
               </ul>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Wyrd Forge Platform section */}
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <Flame size={16} className="text-red-500" />
+          <h2 className="text-base font-semibold text-foreground">
+            {lang === "es" ? "Plataforma Wyrd Forge" : "Wyrd Forge Platform"}
+          </h2>
+        </div>
+
+        {/* Forge KPI cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+          {[
+            { label: { es: 'Total proyectos Forge', en: 'Total Forge projects' }, value: forgeStats?.totalForgeProjects ?? '--', icon: Flame },
+            { label: { es: 'Proyectos desplegados', en: 'Deployed projects' }, value: forgeStats?.deployedProjects ?? '--', icon: Globe },
+            { label: { es: 'Total llamadas IA', en: 'Total AI calls' }, value: forgeStats?.totalAICalls ?? '--', icon: Zap },
+            { label: { es: 'Total snapshots', en: 'Total snapshots' }, value: forgeStats?.totalSnapshots ?? '--', icon: Briefcase },
+          ].map((card) => (
+            <div key={card.label.es} className="rounded-xl p-5 bg-card border border-border">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  {card.label[lang]}
+                </span>
+                <card.icon size={15} strokeWidth={1.5} className="text-muted-foreground" />
+              </div>
+              {forgeStatsLoading ? (
+                <Loader2 size={20} className="animate-spin text-muted-foreground" />
+              ) : (
+                <p className="text-2xl font-bold text-foreground">{String(card.value)}</p>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Most active projects */}
+        <div className="rounded-xl bg-card border border-border">
+          <div className="px-5 py-4 border-b border-border">
+            <h2 className="text-sm font-semibold text-foreground">
+              {lang === "es" ? "Proyectos más activos (30 días)" : "Most active projects (30 days)"}
+            </h2>
+          </div>
+          <div className="p-2">
+            {forgeStatsLoading ? (
+              <div className="flex items-center justify-center py-10">
+                <Loader2 size={22} className="animate-spin text-muted-foreground" />
+              </div>
+            ) : !forgeStats?.mostActiveProjects.length ? (
+              <p className="text-sm text-muted-foreground text-center py-8">No forge activity yet</p>
+            ) : (
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="text-muted-foreground">
+                    <th className="text-left px-3 py-2 font-medium">Project</th>
+                    <th className="text-left px-3 py-2 font-medium">AI Calls</th>
+                    <th className="text-left px-3 py-2 font-medium">Last Active</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border">
+                  {forgeStats.mostActiveProjects.map((p, i) => (
+                    <tr key={i} className="hover:bg-muted/40 transition-colors">
+                      <td className="px-3 py-2.5 font-medium text-foreground truncate max-w-[200px]">{p.name}</td>
+                      <td className="px-3 py-2.5 text-muted-foreground">{p.ai_call_count ?? 0}</td>
+                      <td className="px-3 py-2.5 text-muted-foreground">{formatDate(p.last_active_at)}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             )}
           </div>
         </div>

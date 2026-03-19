@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect } from 'react';
 import Editor from '@monaco-editor/react';
 import { Play, Trash2, History } from 'lucide-react';
 import { SupabaseService } from '@/services/SupabaseService';
+import { projectDBService } from '@/services/ProjectDBService';
 
 const HISTORY_KEY = 'forge_sql_history';
 
@@ -19,7 +20,12 @@ function saveToHistory(query: string) {
   localStorage.setItem(HISTORY_KEY, JSON.stringify(hist.slice(0, 10)));
 }
 
-export function SQLEditor() {
+interface SQLEditorProps {
+  projectId?: string | null;
+}
+
+export function SQLEditor({ projectId }: SQLEditorProps = {}) {
+  const resolvedProjectId = projectId ?? sessionStorage.getItem('forge_project_id');
   const [query, setQuery] = useState('SELECT * FROM profiles LIMIT 10;');
   const [isRunning, setIsRunning] = useState(false);
   const [results, setResults] = useState<Record<string, any>[] | null>(null);
@@ -39,36 +45,42 @@ export function SQLEditor() {
     setResults(null);
     setRowCount(null);
 
-    const supabase = SupabaseService.getInstance().client;
-
     try {
-      // Try exec_sql RPC first
-      const { data, error: rpcErr } = await supabase.rpc('exec_sql', { query });
-      if (rpcErr) throw rpcErr;
-      const rows = Array.isArray(data) ? data : [];
-      setResults(rows);
-      setRowCount(rows.length);
-      saveToHistory(query);
-      setHistory(loadHistory());
-    } catch (e: any) {
-      // Fallback: try direct select from table after FROM
-      try {
-        const match = query.match(/FROM\s+([^\s;]+)/i);
-        if (match) {
-          const table = match[1].replace(/[^a-zA-Z0-9_]/g, '');
-          const { data, error: selErr } = await supabase.from(table).select('*').limit(50);
-          if (selErr) throw selErr;
+      if (resolvedProjectId) {
+        // Use project-scoped DB via server API
+        const { data, error: qError } = await projectDBService.query(resolvedProjectId, query);
+        if (qError) throw new Error(String(qError));
+        const rows = Array.isArray(data) ? data : [];
+        setResults(rows);
+        setRowCount(rows.length);
+      } else {
+        // Fall back to main Supabase client
+        const supabase = SupabaseService.getInstance().client;
+        try {
+          const { data, error: rpcErr } = await supabase.rpc('exec_sql', { query });
+          if (rpcErr) throw rpcErr;
           const rows = Array.isArray(data) ? data : [];
           setResults(rows);
           setRowCount(rows.length);
-          saveToHistory(query);
-          setHistory(loadHistory());
-        } else {
-          throw e;
+        } catch (e: any) {
+          const match = query.match(/FROM\s+([^\s;]+)/i);
+          if (match) {
+            const table = match[1].replace(/[^a-zA-Z0-9_]/g, '');
+            const { data, error: selErr } = await supabase.from(table).select('*').limit(50);
+            if (selErr) throw selErr;
+            const rows = Array.isArray(data) ? data : [];
+            setResults(rows);
+            setRowCount(rows.length);
+          } else {
+            throw e;
+          }
         }
-      } catch (e2: any) {
-        setError(e2.message ?? 'Query failed');
       }
+
+      saveToHistory(query);
+      setHistory(loadHistory());
+    } catch (e: any) {
+      setError(e.message ?? 'Query failed');
     } finally {
       setIsRunning(false);
     }

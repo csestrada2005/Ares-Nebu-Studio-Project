@@ -23,6 +23,16 @@ export class SupabaseService {
   }
 
   /**
+   * Returns the Authorization header with the current session's access token.
+   * Used by PlatformService to authenticate all /api/* requests.
+   */
+  public async getAuthHeader(): Promise<{ Authorization: string }> {
+    const { data } = await this.client.auth.getSession();
+    const token = data.session?.access_token ?? '';
+    return { Authorization: `Bearer ${token}` };
+  }
+
+  /**
    * Generates a migration file content and writes it to the WebContainer filesystem.
    */
   public async generateMigration(description: string, sql: string): Promise<void> {

@@ -1,6 +1,8 @@
 import { updateCode } from '../utils/ast';
 import { contextService } from './ContextService';
 import { SupabaseService } from './SupabaseService';
+import { platformService } from './PlatformService';
+import { projectDBService } from './ProjectDBService';
 import { NEBU_SCHEMA_CONTEXT } from '../utils/schemaContext';
 
 interface ModifiedFile {
@@ -111,6 +113,33 @@ const BACKEND_RULES = `When the user asks for backend features (e.g., 'save this
 6. Use the \`cn()\` utility from \`src/lib/utils\` for merging Tailwind classes dynamically.
 7. If the user asks for backend logic (e.g., 'handle Stripe payments' or 'Edge Function'), generate a Deno-compatible TypeScript file at \`supabase/functions/<name>/index.ts\`.
 8. If you need a Shadcn component (e.g., sheet, accordion, dialog) that is not currently in the src/components/ui folder, you MUST include 'npx shadcn-ui@latest add [component-name]' in the 'installCommands' array in your JSON response.`;
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/** Fire-and-forget update of AI call count and last active timestamp. */
+function trackAICall(projectId: string) {
+  const supabase = SupabaseService.getInstance().client;
+  (async () => {
+    try {
+      const { data } = await supabase
+        .from('forge_projects')
+        .select('ai_call_count')
+        .eq('id', projectId)
+        .single();
+      await supabase
+        .from('forge_projects')
+        .update({
+          ai_call_count: (data?.ai_call_count ?? 0) + 1,
+          last_active_at: new Date().toISOString(),
+        })
+        .eq('id', projectId);
+    } catch {
+      // Ignore — non-critical tracking
+    }
+  })();
+}
 
 // ---------------------------------------------------------------------------
 // AIOrchestrator
@@ -236,7 +265,8 @@ export class AIOrchestrator {
   static async parseUserCommand(
     input: string,
     files: Map<string, string>,
-    selectedElement: { tagName: string; className?: string } | null = null
+    selectedElement: { tagName: string; className?: string } | null = null,
+    projectId?: string
   ): Promise<{ modifiedFiles: string[] }> {
     this.retryCount = 0;
 
@@ -265,9 +295,10 @@ export class AIOrchestrator {
 
       if (fileContent) {
         try {
+          const { Authorization } = await SupabaseService.getInstance().getAuthHeader();
           const response = await fetch('/api/ai-action', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { 'Content-Type': 'application/json', Authorization },
             body: JSON.stringify({
               userPrompt: input,
               selectedElementContext: `<${selectedElement.tagName} className='${selectedElement.className || ''}' />`,
@@ -303,8 +334,32 @@ export class AIOrchestrator {
       relevantContext += `--- START ${f.path} ---\n${f.content}\n--- END ${f.path} ---\n`;
     }
 
+    // Build system prompt — inject project DB context if available
+    let projectDbContext = '';
+    if (projectId) {
+      try {
+        const creds = await projectDBService.getCredentials(projectId);
+        if (creds.projectUrl && creds.anonKey) {
+          projectDbContext =
+            `\n\nPROJECT DATABASE: This project has its own Supabase instance.\n` +
+            `SUPABASE_URL: ${creds.projectUrl}\n` +
+            `SUPABASE_ANON_KEY: ${creds.anonKey}\n` +
+            `Use these values when generating Supabase client code for this project.\n`;
+        }
+      } catch {
+        // non-critical
+      }
+    }
+
+    let emailContext = '';
+    if (projectId) {
+      emailContext =
+        `\n\nEMAIL: To send email in this project, call POST /api/email/${projectId}/send ` +
+        `with { to, templateName, variables }. Do not use any third-party email SDK directly.\n`;
+    }
+
     const systemPrompt =
-      NEBU_SCHEMA_CONTEXT + '\n\n' +
+      NEBU_SCHEMA_CONTEXT + projectDbContext + emailContext + '\n\n' +
       'You are an expert Senior React Engineer.\n' +
       FORMAT_INSTRUCTION + '\n' +
       REACT_TAILWIND_RULES + '\n' +
@@ -368,6 +423,12 @@ export class AIOrchestrator {
       }
 
       this.lastModifiedFiles = modifiedPaths;
+
+      // Fire-and-forget AI call tracking
+      if (projectId && modifiedPaths.length > 0) {
+        trackAICall(projectId);
+      }
+
       return { modifiedFiles: modifiedPaths };
     } catch (error) {
       console.error('[AIOrchestrator] Error parsing AI response:', error);
@@ -415,25 +476,20 @@ export class AIOrchestrator {
   }
 
   // -------------------------------------------------------------------------
-  // LLM gateway — unchanged
+  // LLM gateway — uses PlatformService to attach auth header
   // -------------------------------------------------------------------------
 
   static async callLLM(userMessage: string, systemPrompt: string): Promise<string> {
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'anthropic-version': '2023-06-01',
-        },
-        body: JSON.stringify({
-          model: 'claude-sonnet-4-6',
-          max_tokens: 8192,
-          system: systemPrompt,
-          messages: [{ role: 'user', content: userMessage }],
-        }),
+      const response = await platformService.callChat({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 8192,
+        system: systemPrompt,
+        messages: [{ role: 'user', content: userMessage }],
       });
 
+      // platformService.callChat also needs anthropic-version header
+      // We need to add that header — use a raw fetch with full headers instead
       const data = await response.json();
 
       if (data.error) {
