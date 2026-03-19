@@ -2,10 +2,11 @@ import { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import {
   ArrowLeft, ExternalLink, Code2, Database, Globe, Mail,
-  BarChart3, Gauge, Settings, Layers, Loader2, CheckCircle, Circle, Trash2
+  BarChart3, Gauge, Settings, Layers, Loader2, CheckCircle, Circle, Trash2, Sparkles
 } from 'lucide-react';
 import { SupabaseService } from '@/services/SupabaseService';
 import { DatabaseOverview } from '@/components/settings/db/DatabaseOverview';
+import { AIHistoryPanel } from '@/components/settings/AIHistoryPanel';
 import { SchemaViewer } from '@/components/settings/db/SchemaViewer';
 import { UsersManager } from '@/components/settings/db/UsersManager';
 import { SQLEditor } from '@/components/settings/db/SQLEditor';
@@ -28,7 +29,7 @@ interface ForgeProject {
   supabase_project_url: string | null;
 }
 
-type HubTab = 'overview' | 'database' | 'domains' | 'email' | 'analytics' | 'performance' | 'settings';
+type HubTab = 'overview' | 'database' | 'domains' | 'email' | 'analytics' | 'performance' | 'ai_history' | 'settings';
 
 const HUB_TABS: { id: HubTab; label: string; Icon: React.ComponentType<any> }[] = [
   { id: 'overview', label: 'Overview', Icon: Layers },
@@ -37,6 +38,7 @@ const HUB_TABS: { id: HubTab; label: string; Icon: React.ComponentType<any> }[] 
   { id: 'email', label: 'Email', Icon: Mail },
   { id: 'analytics', label: 'Analytics', Icon: BarChart3 },
   { id: 'performance', label: 'Performance', Icon: Gauge },
+  { id: 'ai_history', label: 'AI History', Icon: Sparkles },
   { id: 'settings', label: 'Settings', Icon: Settings },
 ];
 
@@ -119,7 +121,7 @@ export default function ProjectHubPage() {
     try {
       const supabase = SupabaseService.getInstance().client;
       await supabase.from('forge_projects').update({ name: newName.trim() }).eq('id', projectId);
-      setProject(prev => prev ? { ...prev, name: newName.trim() } : prev);
+      setProject(prev => prev ? { ...prev, name: newName.trim() } : null);
     } finally {
       setIsSavingName(false);
     }
@@ -262,10 +264,10 @@ export default function ProjectHubPage() {
                 </button>
               ))}
             </div>
-            {dbSubTab === 'overview' && <DatabaseOverview projectId={projectId} />}
-            {dbSubTab === 'schema' && <SchemaViewer projectId={projectId} />}
+            {dbSubTab === 'overview' && <DatabaseOverview projectId={projectId!} />}
+            {dbSubTab === 'schema' && <SchemaViewer projectId={projectId!} />}
             {dbSubTab === 'users' && <UsersManager />}
-            {dbSubTab === 'sql' && <SQLEditor projectId={projectId} />}
+            {dbSubTab === 'sql' && <SQLEditor projectId={projectId!} />}
           </div>
         )}
 
@@ -299,6 +301,14 @@ export default function ProjectHubPage() {
           <div className="max-w-2xl">
             <h2 className="text-xl font-bold text-white mb-6">Performance</h2>
             <LighthousePanel projectId={projectId ?? null} />
+          </div>
+        )}
+
+        {/* AI History tab */}
+        {activeTab === 'ai_history' && (
+          <div className="max-w-4xl">
+            <h2 className="text-xl font-bold text-white mb-6">AI History</h2>
+            <AIHistoryPanel projectId={projectId ?? null} />
           </div>
         )}
 

@@ -84,13 +84,29 @@ export class Implementer {
     return modifiedFiles;
   }
 
+  private static truncateToTokenBudget(content: string, maxChars = 24000): string {
+    if (content.length <= maxChars) {
+      return content;
+    }
+    const lines = content.split('\n');
+    const firstLines = lines.slice(0, 40).join('\n');
+    const lastLines = lines.slice(-20).join('\n');
+    const omittedCount = lines.length - 60;
+
+    if (omittedCount > 0) {
+      return `${firstLines}\n\n// ... (${omittedCount} lines omitted for context budget) ...\n\n${lastLines}`;
+    }
+    return content;
+  }
+
   private static async executeStep(
     step: BuildStep,
     files: Map<string, string>,
     memory: ProjectMemory
   ): Promise<string | null> {
-    const currentContent = files.get(step.file_path) ?? '';
-    const importedContext = this.getImportedFileContext(currentContent, files);
+    const rawContent = files.get(step.file_path) ?? '';
+    const currentContent = this.truncateToTokenBudget(rawContent);
+    const importedContext = this.getImportedFileContext(rawContent, files);
     const compactMemory = this.buildCompactMemory(memory);
 
     const systemPrompt =
@@ -152,6 +168,7 @@ export class Implementer {
     const importRegex = /from\s+['"](@\/|\.\.?\/)([\w/.-]+)['"]/g;
     const parts: string[] = [];
     let m: RegExpExecArray | null;
+    let totalChars = 0;
 
     while ((m = importRegex.exec(fileContent)) !== null) {
       const rawPath = m[2];
@@ -163,12 +180,19 @@ export class Implementer {
           : `${prefix}${rawPath}${ext}`;
 
         if (files.has(candidate)) {
-          parts.push(`--- ${candidate} ---\n${files.get(candidate)!.slice(0, 800)}`);
+          const contentSnippet = files.get(candidate)!.slice(0, 400);
+          const partStr = `--- ${candidate} ---\n${contentSnippet}`;
+
+          if (totalChars + partStr.length > 1200) {
+            break;
+          }
+          parts.push(partStr);
+          totalChars += partStr.length;
           break;
         }
       }
 
-      if (parts.length >= 3) break; // cap at 3 imports to keep context size reasonable
+      if (totalChars >= 1200) break;
     }
 
     return parts.join('\n');

@@ -8,7 +8,11 @@ interface Message {
 
 interface ChatInterfaceProps {
   isLoading: boolean;
-  onSendMessage: (message: string) => Promise<{ success: boolean; modifiedFiles: string[] }>;
+  onSendMessage: (
+    message: string,
+    onProgress?: (step: number, total: number, file: string) => void,
+    onRetry?: (attempt: number, error: string) => void
+  ) => Promise<{ success: boolean; modifiedFiles: string[]; error?: string }>;
   selectedElement: { tagName: string; className?: string } | null;
 }
 
@@ -19,6 +23,14 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
   const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const [progressLines, setProgressLines] = useState<{
+    text: string;
+    status: 'pending' | 'done' | 'error';
+  }[]>([]);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [lastError, setLastError] = useState<string | null>(null);
+  const startTimeRef = useRef<number | null>(null);
+
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   };
@@ -27,7 +39,7 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
     scrollToBottom();
   }, [messages, isLoading]);
 
-  const buildAssistantMessage = (result: { success: boolean; modifiedFiles: string[] }): string => {
+  const buildAssistantMessage = (result: { success: boolean; modifiedFiles: string[]; error?: string }): string => {
     if (!result.success) {
       return 'Sorry, something went wrong processing your request.';
     }
@@ -44,14 +56,75 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
     setInput('');
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
 
+    startTimeRef.current = Date.now();
+    setElapsedSeconds(0);
+    setLastError(null);
+    setProgressLines([{ text: 'Planning...', status: 'pending' }]);
+
+    const intervalId = setInterval(() => {
+      if (startTimeRef.current) {
+        setElapsedSeconds(Math.floor((Date.now() - startTimeRef.current) / 1000));
+      }
+    }, 1000);
+
     try {
-      const result = await onSendMessage(userMessage);
+      const result = await onSendMessage(
+        userMessage,
+        (_step, _total, file) => {
+          setProgressLines(prev => {
+            const next = [...prev];
+            if (next.length > 0 && next[next.length - 1].status === 'pending') {
+              next[next.length - 1].status = 'done';
+            }
+            next.push({ text: `Creating ${file}`, status: 'pending' });
+            return next;
+          });
+        },
+        (attempt, _errorMsg) => {
+          setProgressLines(prev => {
+            const next = [...prev];
+            if (next.length > 0 && next[next.length - 1].status === 'pending') {
+              next[next.length - 1].status = 'done';
+            }
+            next.push({ text: `Fixing compile error (attempt ${attempt}/3)...`, status: 'pending' });
+            return next;
+          });
+        }
+      );
+
+      clearInterval(intervalId);
+
+      if (result.success) {
+        setProgressLines([{ text: `Modified ${result.modifiedFiles.length} files in ${elapsedSeconds}s`, status: 'done' }]);
+        setTimeout(() => setProgressLines([]), 4000);
+      } else {
+        setProgressLines(prev => {
+          const next = [...prev];
+          if (next.length > 0) {
+            next[next.length - 1].status = 'error';
+          }
+          next.push({ text: 'Failed after 3 retries', status: 'error' });
+          return next;
+        });
+        if (result.error) {
+          setLastError(result.error);
+        }
+      }
+
       setMessages(prev => [
         ...prev,
         { role: 'assistant', content: buildAssistantMessage(result) }
       ]);
     } catch (error) {
+      clearInterval(intervalId);
       console.error('Error in chat:', error);
+      setProgressLines(prev => {
+        const next = [...prev];
+        if (next.length > 0) {
+          next[next.length - 1].status = 'error';
+        }
+        return next;
+      });
       setMessages(prev => [
         ...prev,
         { role: 'assistant', content: 'Sorry, an unexpected error occurred.' }
@@ -90,7 +163,45 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
             </div>
           </div>
         ))}
-        {isLoading && (
+        {progressLines.length > 0 && (
+          <div className="flex justify-start w-full">
+            <div className="bg-gray-950 border border-gray-800 rounded-lg p-3 font-mono text-xs space-y-1 w-[85%]">
+              {progressLines.map((line, idx) => (
+                <div key={idx} className="flex justify-between items-center">
+                  <div className={`flex items-center gap-2 ${
+                    line.status === 'done' ? 'text-gray-500' :
+                    line.status === 'error' ? 'text-red-400' : 'text-green-400'
+                  }`}>
+                    {line.status === 'done' && <span>✓</span>}
+                    {line.status === 'error' && <span>✗</span>}
+                    {line.status === 'pending' && <span className="animate-spin inline-block">⟳</span>}
+                    <span>{line.text}</span>
+                  </div>
+                  {line.status === 'pending' && (
+                    <span className="text-gray-500">{elapsedSeconds}s</span>
+                  )}
+                </div>
+              ))}
+              {lastError && (
+                <div className="mt-2 p-2 bg-red-900/20 border border-red-500/30 rounded text-red-400">
+                  <div className="flex justify-between items-start mb-1">
+                    <span className="font-semibold">Error Details</span>
+                    <button
+                      onClick={() => navigator.clipboard.writeText(lastError)}
+                      className="text-gray-400 hover:text-white underline text-[10px]"
+                    >
+                      Copy error
+                    </button>
+                  </div>
+                  <div className="overflow-x-auto whitespace-pre-wrap text-[10px]">
+                    {lastError}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+        {isLoading && progressLines.length === 0 && (
           <div className="flex justify-start w-full">
              <div className="bg-gray-800 text-gray-200 rounded-lg p-3 text-sm flex items-center gap-1">
                <Loader2 className="w-4 h-4 animate-spin" />

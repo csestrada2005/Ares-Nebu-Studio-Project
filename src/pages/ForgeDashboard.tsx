@@ -3,6 +3,7 @@ import { Layers, Flame, Plus, Search, Settings, LogOut, Trash2, Loader2, LayoutD
 import { useNavigate } from "react-router-dom";
 import { SupabaseService } from "@/services/SupabaseService";
 import { useAuth } from "@/contexts/AuthContext";
+import { ProjectMemoryService } from "@/services/ProjectMemoryService";
 
 interface ForgeProject {
   id: string;
@@ -20,6 +21,11 @@ const ForgeDashboard = () => {
   const [projects, setProjects] = useState<ForgeProject[]>([]);
   const [isLoadingProjects, setIsLoadingProjects] = useState(true);
   const [isCreating, setIsCreating] = useState(false);
+  const [projectSummaries, setProjectSummaries] = useState<Map<string, {
+    componentCount: number;
+    routeCount: number;
+    techStack: string[];
+  } | null>>(new Map());
   const navigate = useNavigate();
   const { user } = useAuth();
 
@@ -44,6 +50,18 @@ const ForgeDashboard = () => {
     };
     fetchProjects();
   }, [user]);
+
+  useEffect(() => {
+    if (projects.length === 0) return;
+    Promise.all(
+      projects.map(p =>
+        ProjectMemoryService.getProjectSummary(p.id).then(summary => ({ id: p.id, summary }))
+      )
+    ).then(results => {
+      const map = new Map(results.map(r => [r.id, r.summary]));
+      setProjectSummaries(map);
+    });
+  }, [projects]);
 
   const filteredProjects = projects.filter((p) =>
     p.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -264,9 +282,18 @@ const ForgeDashboard = () => {
                       </div>
                     </div>
 
-                    <p className="text-[11px] text-gray-600 mb-3">
+                    <p className="text-[11px] text-gray-600 mb-1">
                       Updated {formatDate(project.updated_at)}
                     </p>
+                    {(() => {
+                      const summary = projectSummaries.get(project.id);
+                      if (!summary) return <div className="h-4 mb-3" />; // spacer
+                      return (
+                        <p className="text-[11px] text-gray-600 font-mono mb-3">
+                          {summary.componentCount} components · {summary.routeCount} routes
+                        </p>
+                      );
+                    })()}
 
                     {/* Action buttons */}
                     <div className="flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">

@@ -32,7 +32,6 @@ import {
   Settings,
   Activity,
   Menu,
-  X,
   Code,
   Eye,
 } from 'lucide-react';
@@ -43,6 +42,7 @@ import { StateGraph } from '../components/debug/StateGraph';
 import { CommandBubble } from '../components/CommandBubble';
 import { CommandModal } from '../components/CommandModal';
 import { HistoryDrawer } from '../components/HistoryDrawer';
+import { ProjectMemoryService } from '../services/ProjectMemoryService';
 
 type TabType = 'chat' | 'visual' | 'code';
 
@@ -67,13 +67,15 @@ export function StudioEngine() {
   // -------------------------------------------------------------------------
   // File state (replaces WebContainer + FileSystemTree)
   // -------------------------------------------------------------------------
-  const { files, isLoading, loadFromSupabase, saveFile, deleteFile, updateLocalFile } = useProjectFiles();
+  const { files, isLoading, loadFromSupabase, saveFile, updateLocalFile, flushPendingWrites } = useProjectFiles();
 
   // -------------------------------------------------------------------------
   // Preview state
   // -------------------------------------------------------------------------
   const [compiledHtml, setCompiledHtml] = useState('');
   const [isCompiling, setIsCompiling] = useState(false);
+  const [isIndexing, setIsIndexing] = useState(false);
+  const memoryInitialized = useRef<boolean>(false);
 
   // -------------------------------------------------------------------------
   // UI state
@@ -191,6 +193,44 @@ export function StudioEngine() {
   }, [files]);
 
   // -------------------------------------------------------------------------
+  // Memory initialization overlay
+  // -------------------------------------------------------------------------
+  useEffect(() => {
+    if (!isLoading && files.size > 0 && projectId && !memoryInitialized.current) {
+      memoryInitialized.current = true;
+      ProjectMemoryService.get(projectId).then(memory => {
+        if (!memory) {
+          setIsIndexing(true);
+          ProjectMemoryService.buildFromFiles(projectId, files).finally(() => {
+            setIsIndexing(false);
+          });
+        }
+      });
+    }
+  }, [isLoading, files.size, projectId]);
+
+  // -------------------------------------------------------------------------
+  // Memory refresh listener
+  // -------------------------------------------------------------------------
+  const memoryRefreshTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const { path, projectId: pid } = (e as CustomEvent).detail;
+      if (pid !== projectId) return;
+      if (memoryRefreshTimer.current) clearTimeout(memoryRefreshTimer.current);
+      memoryRefreshTimer.current = setTimeout(() => {
+        ProjectMemoryService.updateAfterChange(projectId!, [path], files);
+      }, 5000);
+    };
+    window.addEventListener('forge:file-saved', handler);
+    return () => {
+      window.removeEventListener('forge:file-saved', handler);
+      if (memoryRefreshTimer.current) clearTimeout(memoryRefreshTimer.current);
+    };
+  }, [projectId, files]);
+
+  // -------------------------------------------------------------------------
   // Phase 4 Fix 4: run initialPrompt only after files have loaded
   // -------------------------------------------------------------------------
   useEffect(() => {
@@ -222,7 +262,7 @@ export function StudioEngine() {
   // Keyboard shortcuts (Ctrl+Z / Ctrl+Y handled by browser native undo in textarea)
   // -------------------------------------------------------------------------
   useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
+    const handleKeyDown = (_e: KeyboardEvent) => {
       // Future: wire undo/redo to file history here
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -243,6 +283,7 @@ export function StudioEngine() {
 
       const doSave = async () => {
         try {
+          await flushPendingWrites(); // Ensure all debounced files are actually saved to Supabase before we take snapshot of fileTree
           await supabase.from('forge_snapshots').insert({
             project_id: projectId,
             user_id: user.id,
@@ -268,7 +309,7 @@ export function StudioEngine() {
     } catch (e) {
       console.error('[saveSnapshot] Error:', e);
     }
-  }, [projectId, files]);
+  }, [projectId, files, flushPendingWrites]);
 
   // -------------------------------------------------------------------------
   // Template loader
@@ -372,7 +413,7 @@ export function StudioEngine() {
     message: string,
     onProgress?: (step: number, total: number, file: string) => void,
     onRetry?: (attempt: number, error: string) => void
-  ): Promise<{ success: boolean; modifiedFiles: string[] }> => {
+  ): Promise<{ success: boolean; modifiedFiles: string[]; error?: string }> => {
     if (isReadOnly) return { success: false, modifiedFiles: [] };
     setIsGenerating(true);
     try {
@@ -388,7 +429,11 @@ export function StudioEngine() {
       if (result.modifiedFiles.length > 0) {
         await saveSnapshot('ai_action');
       }
-      return { success: result.outcome !== 'failed', modifiedFiles: result.modifiedFiles };
+      return {
+        success: result.outcome !== 'failed',
+        modifiedFiles: result.modifiedFiles,
+        error: result.error
+      };
     } catch (error) {
       console.error('[StudioEngine] Error processing message:', error);
       return { success: false, modifiedFiles: [] };
@@ -401,6 +446,7 @@ export function StudioEngine() {
   // Download project as ZIP
   // -------------------------------------------------------------------------
   const downloadProject = async () => {
+    await flushPendingWrites();
     const zip = new JSZip();
     for (const [path, content] of files) {
       zip.file(path, content);
@@ -576,9 +622,16 @@ export function StudioEngine() {
                     </div>
                   )}
 
+                  {isIndexing && (
+                    <div className="absolute inset-0 bg-gray-950/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center gap-3">
+                      <Loader2 className="animate-spin text-red-500" size={28} />
+                      <p className="text-sm text-gray-400 font-mono">Analyzing project structure...</p>
+                    </div>
+                  )}
+
                   <iframe
                     ref={iframeRef}
-                    srcdoc={compiledHtml}
+                    srcDoc={compiledHtml}
                     sandbox="allow-scripts allow-modals"
                     className="w-full h-full border-none"
                     title="Preview"

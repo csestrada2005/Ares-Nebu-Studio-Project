@@ -182,7 +182,7 @@ export class AIOrchestrator {
 
   static async generatePlan(
     userGoal: string,
-    files: Map<string, string>
+    _files: Map<string, string>
   ): Promise<{ modifiedFiles: string[] }> {
     const systemPrompt =
       'You are a Senior Technical Project Manager. Create a detailed implementation plan for the user\'s request. Output ONLY the content of a PLAN.md file. The format must be a markdown checklist.\n\n' +
@@ -279,6 +279,39 @@ export class AIOrchestrator {
   // Main command parser — wires the 5-layer agentic architecture
   // -------------------------------------------------------------------------
 
+  private static async logIntent(params: {
+    projectId: string;
+    prompt: string;
+    intentType?: string;
+    intentRisk?: string;
+    planSteps?: BuildStep[];
+    modifiedFiles: string[];
+    outcome: 'success' | 'failed';
+    errorMessage?: string;
+    durationMs: number;
+  }): Promise<void> {
+    try {
+      const supabase = SupabaseService.getInstance().client;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      await supabase.from('forge_intent_log').insert({
+        project_id: params.projectId,
+        user_id: user.id,
+        prompt: params.prompt,
+        intent_type: params.intentType,
+        intent_risk: params.intentRisk,
+        plan_steps: params.planSteps,
+        modified_files: params.modifiedFiles,
+        outcome: params.outcome,
+        error_message: params.errorMessage,
+        duration_ms: params.durationMs,
+      });
+    } catch (e) {
+      console.error('[AIOrchestrator] Failed to log intent:', e);
+    }
+  }
+
   static async parseUserCommand(
     input: string,
     files: Map<string, string>,
@@ -288,6 +321,7 @@ export class AIOrchestrator {
     onRetry?: RetryCallback
   ): Promise<OrchestratorResult> {
     this.retryCount = 0;
+    const startTime = Date.now();
 
     // ------------------------------------------------------------------
     // Legacy shortcut commands (preserved for backward compatibility)
@@ -338,7 +372,19 @@ export class AIOrchestrator {
       selectedElement &&
       (intent.type === 'style_change' || intent.risk === 'low')
     ) {
-      return this.runFastLane(input, files, selectedElement);
+      const result = await this.runFastLane(input, files, selectedElement);
+      if (projectId) {
+        await this.logIntent({
+          projectId,
+          prompt: input,
+          intentType: intent.type,
+          intentRisk: intent.risk,
+          modifiedFiles: result.modifiedFiles,
+          outcome: result.outcome || 'success',
+          durationMs: Date.now() - startTime,
+        });
+      }
+      return result;
     }
 
     // ------------------------------------------------------------------
@@ -352,7 +398,19 @@ export class AIOrchestrator {
 
     if (steps.length === 0) {
       // Architect returned nothing — fall back to the legacy heavy lane
-      return this.runHeavyLane(input, files, selectedElement, projectId);
+      const result = await this.runHeavyLane(input, files, selectedElement, projectId);
+      if (projectId) {
+        await this.logIntent({
+          projectId,
+          prompt: input,
+          intentType: intent.type,
+          intentRisk: intent.risk,
+          modifiedFiles: result.modifiedFiles,
+          outcome: result.outcome || 'success',
+          durationMs: Date.now() - startTime,
+        });
+      }
+      return result;
     }
 
     // ------------------------------------------------------------------
@@ -396,6 +454,16 @@ export class AIOrchestrator {
           action: input.slice(0, 120),
           outcome: 'success',
         });
+        await this.logIntent({
+          projectId,
+          prompt: input,
+          intentType: intent.type,
+          intentRisk: intent.risk,
+          planSteps: steps,
+          modifiedFiles: finalPaths,
+          outcome: 'success',
+          durationMs: Date.now() - startTime,
+        });
       }
 
       this.lastModifiedFiles = finalPaths;
@@ -406,6 +474,17 @@ export class AIOrchestrator {
         await ProjectMemoryService.recordAction(projectId, {
           action: input.slice(0, 120),
           outcome: 'failed',
+        });
+        await this.logIntent({
+          projectId,
+          prompt: input,
+          intentType: intent.type,
+          intentRisk: intent.risk,
+          planSteps: steps,
+          modifiedFiles: [],
+          outcome: 'failed',
+          errorMessage: verifyResult.error,
+          durationMs: Date.now() - startTime,
         });
       }
 
@@ -575,7 +654,7 @@ export class AIOrchestrator {
   // Self-correction (called externally when compilation fails)
   // -------------------------------------------------------------------------
 
-  static async handleBuildError(error: string, files: Map<string, string>): Promise<void> {
+  static async handleBuildError(error: string, _files: Map<string, string>): Promise<void> {
     if (this.retryCount >= this.maxRetries) {
       console.warn('[Self-Correction] Max retries reached. Stopping.');
       return;
