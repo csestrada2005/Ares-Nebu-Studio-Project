@@ -1,67 +1,133 @@
 import React, { useState } from 'react';
 import { File, Folder, ChevronRight, ChevronDown, Plus } from 'lucide-react';
-import type { FileSystemTree, DirectoryNode, FileNode, SymlinkNode } from '@webcontainer/api';
 
 interface FileExplorerProps {
-  fileTree: FileSystemTree;
+  files: Map<string, string>;
   onSelect: (path: string) => void;
   onAddPackage?: (packageName: string) => void;
 }
 
-interface FileNodeProps {
+// ---------------------------------------------------------------------------
+// Tree node representation derived from flat Map paths
+// ---------------------------------------------------------------------------
+
+interface TreeNode {
   name: string;
-  node: FileNode | DirectoryNode | SymlinkNode;
   path: string;
+  isDirectory: boolean;
+  children: TreeNode[];
+}
+
+function buildTree(files: Map<string, string>): TreeNode[] {
+  const root: Record<string, TreeNode> = {};
+
+  const getOrCreate = (segments: string[], fullParts: string[]): TreeNode => {
+    const key = fullParts.slice(0, segments.length).join('/');
+    if (!root[key]) {
+      root[key] = {
+        name: segments[segments.length - 1],
+        path: key,
+        isDirectory: true,
+        children: [],
+      };
+    }
+    return root[key];
+  };
+
+  // Sort paths for deterministic order
+  const sortedPaths = Array.from(files.keys()).sort();
+
+  for (const filePath of sortedPaths) {
+    const parts = filePath.split('/');
+    // Ensure all ancestor directories exist
+    for (let depth = 1; depth < parts.length; depth++) {
+      getOrCreate(parts.slice(0, depth), parts);
+    }
+    // Add the file leaf
+    root[filePath] = {
+      name: parts[parts.length - 1],
+      path: filePath,
+      isDirectory: false,
+      children: [],
+    };
+  }
+
+  // Wire up parent → children relationships
+  for (const [key, node] of Object.entries(root)) {
+    const parts = key.split('/');
+    if (parts.length > 1) {
+      const parentKey = parts.slice(0, -1).join('/');
+      if (root[parentKey]) {
+        root[parentKey].children.push(node);
+      }
+    }
+  }
+
+  // Return only top-level nodes, sorted (dirs first, then files)
+  return Object.values(root)
+    .filter(n => !n.path.includes('/'))
+    .sort((a, b) => {
+      if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+}
+
+// ---------------------------------------------------------------------------
+// Recursive tree node component
+// ---------------------------------------------------------------------------
+
+interface TreeNodeProps {
+  node: TreeNode;
   depth: number;
   onSelect: (path: string) => void;
 }
 
-const FileSystemNode: React.FC<FileNodeProps> = ({ name, node, path, depth, onSelect }) => {
-  const [isOpen, setIsOpen] = useState(true);
-  const isDirectory = 'directory' in node;
-
-  // Handling Symlinks if needed, but usually just skip or treat as files
-  const isSymlink = 'symlink' in node;
+const TreeNodeItem: React.FC<TreeNodeProps> = ({ node, depth, onSelect }) => {
+  const [isOpen, setIsOpen] = useState(depth === 0);
 
   const handleClick = () => {
-    if (isDirectory) {
-      setIsOpen(!isOpen);
-    } else if (!isSymlink) {
-      onSelect(path);
+    if (node.isDirectory) {
+      setIsOpen(v => !v);
+    } else {
+      onSelect(node.path);
     }
   };
+
+  const sortedChildren = [...node.children].sort((a, b) => {
+    if (a.isDirectory !== b.isDirectory) return a.isDirectory ? -1 : 1;
+    return a.name.localeCompare(b.name);
+  });
 
   return (
     <div>
       <div
-        className={`flex items-center gap-1 py-1 px-2 hover:bg-gray-800 cursor-pointer select-none text-gray-300 hover:text-white transition-colors`}
+        className="flex items-center gap-1 py-1 px-2 hover:bg-gray-800 cursor-pointer select-none text-gray-300 hover:text-white transition-colors"
         style={{ paddingLeft: `${depth * 12 + 8}px` }}
         onClick={handleClick}
       >
-        {isDirectory && (
+        {node.isDirectory ? (
           <span className="text-gray-500">
             {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
           </span>
+        ) : (
+          <span className="w-3.5" />
         )}
-        {!isDirectory && <span className="w-3.5" />} {/* Spacer for alignment */}
 
-        {isDirectory ? (
+        {node.isDirectory ? (
           <Folder size={14} className="text-red-400" />
         ) : (
           <File size={14} className="text-gray-400" />
         )}
 
-        <span className="text-sm truncate">{name}</span>
+        <span className="text-sm truncate">{node.name}</span>
       </div>
 
-      {isDirectory && isOpen && (
+      {node.isDirectory && isOpen && (
         <div>
-          {Object.entries((node as DirectoryNode).directory).map(([childName, childNode]) => (
-            <FileSystemNode
-              key={childName}
-              name={childName}
-              node={childNode}
-              path={`${path}/${childName}`}
+          {sortedChildren.map(child => (
+            <TreeNodeItem
+              key={child.path}
+              node={child}
               depth={depth + 1}
               onSelect={onSelect}
             />
@@ -72,39 +138,38 @@ const FileSystemNode: React.FC<FileNodeProps> = ({ name, node, path, depth, onSe
   );
 };
 
-export const FileExplorer: React.FC<FileExplorerProps> = ({ fileTree, onSelect, onAddPackage }) => {
+// ---------------------------------------------------------------------------
+// FileExplorer
+// ---------------------------------------------------------------------------
+
+export const FileExplorer: React.FC<FileExplorerProps> = ({ files, onSelect, onAddPackage }) => {
   const handleAddPackage = (e: React.MouseEvent) => {
     e.stopPropagation();
     const pkg = window.prompt('Enter npm package name (e.g. framer-motion):');
     if (pkg && onAddPackage) {
-        onAddPackage(pkg);
+      onAddPackage(pkg);
     }
   };
+
+  const tree = buildTree(files);
 
   return (
     <div className="h-full bg-gray-900 overflow-y-auto border-r border-gray-800 flex flex-col">
       <div className="p-3 font-semibold text-xs text-gray-500 uppercase tracking-wider border-b border-gray-800 flex justify-between items-center">
         <span>Explorer</span>
         {onAddPackage && (
-            <button
-                onClick={handleAddPackage}
-                className="hover:text-white transition-colors p-1 rounded hover:bg-gray-800"
-                title="Install npm package"
-            >
-                <Plus size={14} />
-            </button>
+          <button
+            onClick={handleAddPackage}
+            className="hover:text-white transition-colors p-1 rounded hover:bg-gray-800"
+            title="Install npm package"
+          >
+            <Plus size={14} />
+          </button>
         )}
       </div>
       <div className="flex-1 py-2">
-        {Object.entries(fileTree).map(([name, node]) => (
-          <FileSystemNode
-            key={name}
-            name={name}
-            node={node}
-            path={name} // Start path with filename/dirname at root
-            depth={0}
-            onSelect={onSelect}
-          />
+        {tree.map(node => (
+          <TreeNodeItem key={node.path} node={node} depth={0} onSelect={onSelect} />
         ))}
       </div>
     </div>
