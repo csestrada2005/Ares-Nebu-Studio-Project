@@ -9,6 +9,7 @@ import { IntentClassifier } from './IntentClassifier';
 import { Architect, type BuildStep } from './Architect';
 import { Implementer, type ProgressCallback } from './Implementer';
 import { Verifier, type RetryCallback } from './Verifier';
+import { CreditService } from './CreditService';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -31,6 +32,8 @@ export interface OrchestratorResult {
   outcome?: 'success' | 'failed';
   error?: string;
   warning?: string;
+  tokensInput?: number;
+  tokensOutput?: number;
 }
 
 // ---------------------------------------------------------------------------
@@ -346,6 +349,30 @@ export class AIOrchestrator {
     }
 
     // ------------------------------------------------------------------
+    // CREDIT CHECK — must pass before any LLM call
+    // ------------------------------------------------------------------
+    let creditUserId: string | null = null;
+    let isFreePrompt = false;
+    try {
+      const supabase = SupabaseService.getInstance().client;
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user) {
+        creditUserId = user.id;
+        const creditCheck = await CreditService.canMakeCall(user.id);
+        if (!creditCheck.allowed) {
+          return { modifiedFiles: [], outcome: 'failed', error: 'INSUFFICIENT_CREDITS' };
+        }
+        isFreePrompt = creditCheck.isFreePrompt ?? false;
+        if (isFreePrompt) {
+          await CreditService.markFreePromptUsed(user.id);
+        }
+      }
+    } catch (e) {
+      console.error('[AIOrchestrator] Credit check error:', e);
+      // Fail open on credit check errors
+    }
+
+    // ------------------------------------------------------------------
     // LAYER 1 — ProjectMemoryService: get or build project memory
     // ------------------------------------------------------------------
     let memory = projectId ? await ProjectMemoryService.get(projectId) : null;
@@ -374,6 +401,10 @@ export class AIOrchestrator {
       (intent.type === 'style_change' || intent.risk === 'low')
     ) {
       const result = await this.runFastLane(input, files, selectedElement);
+      if (result.outcome === 'success' && creditUserId && !isFreePrompt) {
+        await CreditService.deductCredits(creditUserId, 0, 0, projectId);
+        window.dispatchEvent(new CustomEvent('forge:credits-updated'));
+      }
       if (projectId) {
         await this.logIntent({
           projectId,
@@ -397,6 +428,15 @@ export class AIOrchestrator {
 
     if (isSimpleEdit && files.size > 0) {
       const result = await this.runSimpleLane(input, files, selectedElement, projectId);
+      if (result.outcome === 'success' && creditUserId && !isFreePrompt) {
+        await CreditService.deductCredits(
+          creditUserId,
+          result.tokensInput ?? 0,
+          result.tokensOutput ?? 0,
+          projectId
+        );
+        window.dispatchEvent(new CustomEvent('forge:credits-updated'));
+      }
       if (projectId) {
         await this.logIntent({
           projectId,
@@ -423,6 +463,15 @@ export class AIOrchestrator {
     if (steps.length === 0) {
       // Architect returned nothing — fall back to the legacy heavy lane
       const result = await this.runHeavyLane(input, files, selectedElement, projectId);
+      if (result.outcome === 'success' && creditUserId && !isFreePrompt) {
+        await CreditService.deductCredits(
+          creditUserId,
+          result.tokensInput ?? 0,
+          result.tokensOutput ?? 0,
+          projectId
+        );
+        window.dispatchEvent(new CustomEvent('forge:credits-updated'));
+      }
       if (projectId) {
         await this.logIntent({
           projectId,
@@ -468,6 +517,14 @@ export class AIOrchestrator {
       for (const path of finalPaths) {
         const content = finalFiles.get(path)!;
         this.notifyFileUpdate(path, content);
+      }
+
+      // Deduct credits for main pipeline
+      if (creditUserId && !isFreePrompt) {
+        const totalInput = verifyResult.tokensInput ?? 0;
+        const totalOutput = verifyResult.tokensOutput ?? 0;
+        await CreditService.deductCredits(creditUserId, totalInput, totalOutput, projectId);
+        window.dispatchEvent(new CustomEvent('forge:credits-updated'));
       }
 
       // Update memory and record success
@@ -613,7 +670,12 @@ export class AIOrchestrator {
         trackAICall(projectId);
       }
       this.lastModifiedFiles = [topFile.path];
-      return { modifiedFiles: [topFile.path], outcome: 'success' };
+      return {
+        modifiedFiles: [topFile.path],
+        outcome: 'success',
+        tokensInput: data.usage?.input_tokens ?? 0,
+        tokensOutput: data.usage?.output_tokens ?? 0,
+      };
     } catch (e) {
       console.error('[AIOrchestrator] Simple lane error:', e);
       return { modifiedFiles: [], outcome: 'failed' };
@@ -700,8 +762,8 @@ export class AIOrchestrator {
       `USER REQUEST:\n${input}`;
 
     try {
-      const rawResponse = await this.callLLM(userMessage, systemPrompt);
-      const cleanJson = this.cleanJsonOutput(rawResponse);
+      const rawResponse = await this.callLLMWithUsage(userMessage, systemPrompt);
+      const cleanJson = this.cleanJsonOutput(rawResponse.text);
       const response: LLMResponse = JSON.parse(cleanJson);
 
       const modifiedPaths: string[] = [];
@@ -723,7 +785,12 @@ export class AIOrchestrator {
         trackAICall(projectId);
       }
 
-      return { modifiedFiles: modifiedPaths, outcome: 'success' };
+      return {
+        modifiedFiles: modifiedPaths,
+        outcome: 'success',
+        tokensInput: rawResponse.tokensInput,
+        tokensOutput: rawResponse.tokensOutput,
+      };
     } catch (error) {
       console.error('[AIOrchestrator] Heavy lane error:', error);
       return { modifiedFiles: [] };
@@ -774,6 +841,14 @@ export class AIOrchestrator {
   // -------------------------------------------------------------------------
 
   static async callLLM(userMessage: string, systemPrompt: string): Promise<string> {
+    const result = await this.callLLMWithUsage(userMessage, systemPrompt);
+    return result.text;
+  }
+
+  static async callLLMWithUsage(
+    userMessage: string,
+    systemPrompt: string
+  ): Promise<{ text: string; tokensInput: number; tokensOutput: number }> {
     try {
       const response = await platformService.callChat({
         model: 'claude-sonnet-4-6',
@@ -790,13 +865,17 @@ export class AIOrchestrator {
 
       if (!data.content || !data.content[0] || !data.content[0].text) {
         console.error('[AIOrchestrator] Unexpected response format:', data);
-        return JSON.stringify({ modifiedFiles: [] });
+        return { text: JSON.stringify({ modifiedFiles: [] }), tokensInput: 0, tokensOutput: 0 };
       }
 
-      return data.content[0].text;
+      return {
+        text: data.content[0].text,
+        tokensInput: data.usage?.input_tokens ?? 0,
+        tokensOutput: data.usage?.output_tokens ?? 0,
+      };
     } catch (error) {
       console.error('[AIOrchestrator] Error calling LLM:', error);
-      return JSON.stringify({ modifiedFiles: [] });
+      return { text: JSON.stringify({ modifiedFiles: [] }), tokensInput: 0, tokensOutput: 0 };
     }
   }
 

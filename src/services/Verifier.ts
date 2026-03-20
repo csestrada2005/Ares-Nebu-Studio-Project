@@ -10,6 +10,8 @@ export interface VerifyResult {
   success: boolean;
   error?: string;
   files: Map<string, string>;
+  tokensInput?: number;
+  tokensOutput?: number;
 }
 
 // ---------------------------------------------------------------------------

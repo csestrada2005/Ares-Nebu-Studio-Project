@@ -12,11 +12,32 @@ import {
   ArrowRight,
   Loader2,
   Code,
+  Globe,
 } from "lucide-react";
 import { useLanguage } from "@/contexts/LanguageContext";
+import { useAuth } from "@/contexts/AuthContext";
 import EmptyState from "@/components/EmptyState";
 import { getRecentProjects, getDashboardKPIs } from "@/services/data/supabaseData";
+import { SupabaseService } from "@/services/SupabaseService";
 import type { Project, DashboardKPIs } from "@/types";
+
+interface ForgeProject {
+  id: string;
+  name: string;
+  updated_at: string;
+  deployment_url: string | null;
+  ai_call_count: number;
+}
+
+function relativeTime(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const mins = Math.floor(diff / 60000);
+  if (mins < 1) return 'just now';
+  if (mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins / 60);
+  if (hrs < 24) return `${hrs}h ago`;
+  return `${Math.floor(hrs / 24)}d ago`;
+}
 
 const STATUS_LABELS: Record<Project["status"], { es: string; en: string }> = {
   active: { es: "Activo", en: "Active" },
@@ -49,10 +70,13 @@ const DEFAULT_KPIS: DashboardKPIs = {
 
 const DevDashboard = () => {
   const { lang } = useLanguage();
+  const { user } = useAuth();
   const navigate = useNavigate();
   const [isLoading, setIsLoading] = useState(true);
   const [kpis, setKpis] = useState<DashboardKPIs>(DEFAULT_KPIS);
   const [recentProjects, setRecentProjects] = useState<Project[]>([]);
+  const [forgeProjects, setForgeProjects] = useState<ForgeProject[]>([]);
+  const [forgeLoading, setForgeLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,6 +102,30 @@ const DevDashboard = () => {
       cancelled = true;
     };
   }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    const loadForge = async () => {
+      setForgeLoading(true);
+      try {
+        const supabase = SupabaseService.getInstance().client;
+        const { data } = await supabase
+          .from('forge_projects')
+          .select('id, name, updated_at, deployment_url, ai_call_count')
+          .eq('user_id', user.id)
+          .order('updated_at', { ascending: false })
+          .limit(3);
+        if (!cancelled && data) setForgeProjects(data as ForgeProject[]);
+      } catch (err) {
+        console.error('Forge projects fetch failed:', err);
+      } finally {
+        if (!cancelled) setForgeLoading(false);
+      }
+    };
+    loadForge();
+    return () => { cancelled = true; };
+  }, [user?.id]);
 
   const now = new Date();
   const hour = now.getHours();
@@ -267,6 +315,70 @@ const DevDashboard = () => {
             </button>
           </div>
         </div>
+      </div>
+
+      {/* Recent Forge Projects */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <Code size={16} className="text-red-500" />
+            <h2 className="text-base font-semibold text-foreground">
+              {lang === "es" ? "Proyectos Forge recientes" : "Recent Forge Projects"}
+            </h2>
+          </div>
+          <button
+            onClick={() => navigate('/forge')}
+            className="text-xs text-muted-foreground hover:text-primary transition-colors flex items-center gap-1"
+          >
+            {lang === "es" ? "Ver todos" : "View all"} <ArrowRight size={12} />
+          </button>
+        </div>
+
+        {forgeLoading ? (
+          <div className="flex items-center justify-center py-8">
+            <Loader2 size={22} className="animate-spin text-muted-foreground" />
+          </div>
+        ) : forgeProjects.length === 0 ? (
+          <div className="rounded-xl bg-card border border-border p-8 flex flex-col items-center gap-3">
+            <Code size={32} className="text-muted-foreground opacity-40" />
+            <p className="text-sm text-muted-foreground text-center">
+              {lang === "es" ? "Aún no tienes proyectos Forge." : "No Forge projects yet."}
+            </p>
+            <button
+              onClick={() => navigate('/forge')}
+              className="px-4 py-2 bg-red-500/10 text-red-500 hover:bg-red-500/15 text-xs font-medium rounded-lg transition-colors"
+            >
+              {lang === "es" ? "Crear proyecto" : "Create a project"}
+            </button>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            {forgeProjects.map((fp) => (
+              <div
+                key={fp.id}
+                className="rounded-xl bg-card border border-border p-4 flex flex-col gap-3"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <p className="text-sm font-semibold text-foreground truncate">{fp.name}</p>
+                  <span
+                    className={`shrink-0 w-2 h-2 rounded-full mt-1.5 ${fp.deployment_url ? 'bg-emerald-500' : 'bg-gray-500'}`}
+                    title={fp.deployment_url ? 'Deployed' : 'Not deployed'}
+                  />
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  {lang === "es" ? "Actualizado" : "Updated"} {relativeTime(fp.updated_at)}
+                </p>
+                <button
+                  onClick={() => navigate(`/studio/${fp.id}`)}
+                  className="mt-auto w-full flex items-center justify-center gap-2 py-2 bg-red-500/10 text-red-500 hover:bg-red-500/15 text-xs font-medium rounded-lg transition-colors"
+                >
+                  <Globe size={12} />
+                  {lang === "es" ? "Abrir" : "Open"}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Bottom sections */}

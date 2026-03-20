@@ -46,6 +46,7 @@ import { CommandBubble } from '../components/CommandBubble';
 import { CommandModal } from '../components/CommandModal';
 import { HistoryDrawer } from '../components/HistoryDrawer';
 import { ProjectMemoryService } from '../services/ProjectMemoryService';
+import CreditBalance from '../components/forge/CreditBalance';
 
 type TabType = 'chat' | 'visual' | 'code';
 
@@ -649,6 +650,13 @@ export function StudioEngine() {
                 <div className="absolute top-4 right-4 z-50 flex items-center gap-1.5 bg-yellow-900/80 border border-yellow-700 text-yellow-300 text-xs px-3 py-1.5 rounded-full">
                   <Eye size={12} />
                   View only
+                </div>
+              )}
+
+              {/* Credit balance — only for owners */}
+              {!isReadOnly && (
+                <div className="absolute top-14 right-4 z-40">
+                  <CreditBalance />
                 </div>
               )}
 
