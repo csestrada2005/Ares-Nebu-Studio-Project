@@ -33,9 +33,41 @@ const AuthContext = createContext<AuthContextType>({
   isCliente: false,
 });
 
+const PROFILE_CACHE_KEY = 'nebu_profile_cache';
+
+function readProfileCache(): Pick<Profile, 'role' | 'pending_role' | 'role_approved'> | null {
+  try {
+    const raw = localStorage.getItem(PROFILE_CACHE_KEY);
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function writeProfileCache(p: Profile) {
+  try {
+    localStorage.setItem(
+      PROFILE_CACHE_KEY,
+      JSON.stringify({ role: p.role, pending_role: p.pending_role, role_approved: p.role_approved })
+    );
+  } catch {}
+}
+
+function clearProfileCache() {
+  try {
+    localStorage.removeItem(PROFILE_CACHE_KEY);
+  } catch {}
+}
+
 export const AuthProvider = ({ children }: { children: ReactNode }) => {
+  // Pre-populate profile with cached role data so the layout renders correctly
+  // immediately on reload, before Supabase resolves.
+  const cachedRole = readProfileCache();
   const [user, setUser] = useState<User | null>(null);
-  const [profile, setProfile] = useState<Profile | null>(null);
+  const [profile, setProfile] = useState<Profile | null>(
+    cachedRole ? (cachedRole as unknown as Profile) : null
+  );
   const [loading, setLoading] = useState(true);
   const mountedRef = useRef(true);
 
@@ -64,6 +96,9 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       if (!retryError && retryData) {
         return retryData as Profile;
       }
+    }
+    if (p?.role) {
+      writeProfileCache(p);
     }
     return p;
   };
@@ -142,6 +177,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             // refrescar el token entre pestañas), NO sobreescribimos el perfil existente.
             // Esto elimina el error de "Account Being Configured".
             if (p) {
+              if (p.role) writeProfileCache(p);
               setProfile(p);
             }
 
@@ -168,6 +204,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
   const signOut = async () => {
     // Clear local state first to avoid any flicker on the way out.
+    clearProfileCache();
     setUser(null);
     setProfile(null);
     await supabase.auth.signOut();

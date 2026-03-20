@@ -152,7 +152,7 @@ const NotificationsPage = () => {
       {/* List */}
       {loading ? (
         <div className="flex items-center justify-center py-20">
-          <Loader2 size={24} className="animate-spin text-muted-foreground" />
+          <Loader2 size={24} className="animate-spin text-primary" />
         </div>
       ) : notifications.length === 0 ? (
         <div className="flex flex-col items-center justify-center py-20 text-center gap-3">

@@ -337,7 +337,7 @@ const AdminDashboard = () => {
               <kpi.icon size={15} strokeWidth={1.5} className="text-muted-foreground group-hover:text-primary transition-colors" />
             </div>
             {isLoading ? (
-              <Loader2 size={20} className="animate-spin text-muted-foreground" />
+              <Loader2 size={20} className="animate-spin text-primary" />
             ) : (
               <p className="text-2xl font-bold text-foreground">{kpi.value}</p>
             )}
@@ -356,7 +356,7 @@ const AdminDashboard = () => {
           <div className="p-2">
             {isLoading ? (
               <div className="flex items-center justify-center py-10">
-                <Loader2 size={22} className="animate-spin text-muted-foreground" />
+                <Loader2 size={22} className="animate-spin text-primary" />
               </div>
             ) : recentSignups.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">
@@ -397,7 +397,7 @@ const AdminDashboard = () => {
           <div className="p-2">
             {isLoading ? (
               <div className="flex items-center justify-center py-10">
-                <Loader2 size={22} className="animate-spin text-muted-foreground" />
+                <Loader2 size={22} className="animate-spin text-primary" />
               </div>
             ) : activeProjects.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-8">
@@ -453,7 +453,7 @@ const AdminDashboard = () => {
                 <card.icon size={15} strokeWidth={1.5} className="text-muted-foreground" />
               </div>
               {forgeStatsLoading ? (
-                <Loader2 size={20} className="animate-spin text-muted-foreground" />
+                <Loader2 size={20} className="animate-spin text-primary" />
               ) : (
                 <p className="text-2xl font-bold text-foreground">{String(card.value)}</p>
               )}
@@ -488,7 +488,7 @@ const AdminDashboard = () => {
                 <card.icon size={15} strokeWidth={1.5} className="text-muted-foreground" />
               </div>
               {creditStatsLoading ? (
-                <Loader2 size={20} className="animate-spin text-muted-foreground" />
+                <Loader2 size={20} className="animate-spin text-primary" />
               ) : (
                 <p className="text-2xl font-bold text-foreground">{card.value}</p>
               )}
@@ -506,7 +506,7 @@ const AdminDashboard = () => {
           <div className="p-2">
             {forgeStatsLoading ? (
               <div className="flex items-center justify-center py-10">
-                <Loader2 size={22} className="animate-spin text-muted-foreground" />
+                <Loader2 size={22} className="animate-spin text-primary" />
               </div>
             ) : !forgeStats?.mostActiveProjects.length ? (
               <p className="text-sm text-muted-foreground text-center py-8">No forge activity yet</p>
@@ -553,7 +553,7 @@ const AdminDashboard = () => {
               <Zap size={15} strokeWidth={1.5} className="text-muted-foreground" />
             </div>
             {platformUsageLoading ? (
-              <Loader2 size={20} className="animate-spin text-muted-foreground" />
+              <Loader2 size={20} className="animate-spin text-primary" />
             ) : (
               <p className="text-2xl font-bold text-foreground">
                 {platformUsage?.totalAICallsMTD?.toLocaleString() ?? 0}
@@ -568,7 +568,7 @@ const AdminDashboard = () => {
               <Flame size={15} strokeWidth={1.5} className="text-muted-foreground" />
             </div>
             {platformUsageLoading ? (
-              <Loader2 size={20} className="animate-spin text-muted-foreground" />
+              <Loader2 size={20} className="animate-spin text-primary" />
             ) : (
               <p className="text-2xl font-bold text-foreground">
                 {platformUsage?.totalActiveForgeProjects ?? 0}
@@ -587,7 +587,7 @@ const AdminDashboard = () => {
           <div className="p-2">
             {platformUsageLoading ? (
               <div className="flex items-center justify-center py-10">
-                <Loader2 size={22} className="animate-spin text-muted-foreground" />
+                <Loader2 size={22} className="animate-spin text-primary" />
               </div>
             ) : !platformUsage?.topSpenders.length ? (
               <p className="text-sm text-muted-foreground text-center py-8">

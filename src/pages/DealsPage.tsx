@@ -177,7 +177,7 @@ const DealsPage = () => {
       <div className="rounded-xl bg-card border border-border overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center py-16">
-            <span className="w-6 h-6 border-2 border-muted border-t-muted-foreground rounded-full animate-spin" />
+            <span className="w-6 h-6 border-2 border-muted border-t-primary rounded-full animate-spin" />
           </div>
         ) : deals.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-16 gap-3">

@@ -113,7 +113,7 @@ export function UserApprovalPanel({ open, onClose }: UserApprovalPanelProps) {
   return (
     <>
       {open && (
-        <div className="fixed inset-0 bg-black/40 z-30" onClick={onClose} />
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30" onClick={onClose} />
       )}
 
       <div
@@ -142,7 +142,7 @@ export function UserApprovalPanel({ open, onClose }: UserApprovalPanelProps) {
         <div className="flex-1 overflow-y-auto px-5 py-4">
           {loading ? (
             <div className="flex items-center justify-center py-16">
-              <Loader2 size={24} className="animate-spin text-muted-foreground" />
+              <Loader2 size={24} className="animate-spin text-primary" />
             </div>
           ) : pendingUsers.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-16 text-center gap-3">
