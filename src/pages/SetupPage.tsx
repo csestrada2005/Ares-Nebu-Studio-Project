@@ -35,6 +35,8 @@ const SetupPage = () => {
           setTimeout(() => reject(new Error('timeout')), 5000)
         )
       ]);
+      // Force a full page reload to clear cached states and re-evaluate layout
+      window.location.reload();
     } catch (err) {
       console.error('Refresh failed or timed out:', err);
     } finally {
