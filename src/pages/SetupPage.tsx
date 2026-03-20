@@ -1,50 +1,11 @@
-import { useEffect, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
 import { useAuth } from '@/contexts/AuthContext';
 import { useLanguage } from '@/contexts/LanguageContext';
-import { LogOut, Clock, RefreshCw, Loader2 } from 'lucide-react';
+import { LogOut, Clock } from 'lucide-react';
 import { motion } from 'framer-motion';
 
 const SetupPage = () => {
-  const { signOut, refreshProfile } = useAuth();
+  const { signOut } = useAuth();
   const { lang } = useLanguage();
-  const [isRefreshing, setIsRefreshing] = useState(false);
-  const navigate = useNavigate();
-
-  // Auto-refresh every 5 seconds while on this page (for when admin approves)
-  useEffect(() => {
-    let isPolling = false;
-
-    const interval = setInterval(async () => {
-      if (isPolling) return;
-      isPolling = true;
-      try {
-        await refreshProfile();
-      } finally {
-        isPolling = false;
-      }
-    }, 5000);
-
-    return () => clearInterval(interval);
-  }, [refreshProfile]);
-
-  const handleRefresh = async () => {
-    setIsRefreshing(true);
-    try {
-      await Promise.race([
-        refreshProfile(),
-        new Promise((_, reject) =>
-          setTimeout(() => reject(new Error('timeout')), 5000)
-        )
-      ]);
-      // Redirect to the dashboard instead of reloading
-      navigate('/');
-    } catch (err) {
-      console.error('Refresh failed or timed out:', err);
-    } finally {
-      setIsRefreshing(false);
-    }
-  };
 
   return (
     <section className="relative h-screen w-screen flex flex-col items-center justify-center bg-[#0A0A0A] overflow-hidden">
@@ -96,16 +57,8 @@ const SetupPage = () => {
           initial={{ opacity: 0 }}
           animate={{ opacity: 1 }}
           transition={{ delay: 0.6, duration: 0.5 }}
-          className="flex flex-col sm:flex-row gap-3"
+          className="flex flex-col items-center gap-4"
         >
-          <button
-            onClick={handleRefresh}
-            disabled={isRefreshing}
-            className="group relative flex items-center justify-center gap-3 px-8 py-3 text-sm font-medium tracking-widest uppercase text-white/60 transition-all hover:text-white overflow-hidden border border-white/20 bg-transparent hover:border-white/50 disabled:opacity-60 disabled:cursor-not-allowed"
-          >
-            {isRefreshing ? <Loader2 size={18} className="animate-spin" /> : <RefreshCw size={18} />}
-            <span>{isRefreshing ? (lang === 'es' ? 'Verificando...' : 'Checking...') : (lang === 'es' ? 'Actualizar estado' : 'Refresh status')}</span>
-          </button>
           <button
             onClick={signOut}
             className="group relative flex items-center justify-center gap-3 px-8 py-3 text-sm font-medium tracking-widest uppercase text-[#E60000] transition-all hover:text-white overflow-hidden border border-[#E60000] bg-transparent"
@@ -114,6 +67,12 @@ const SetupPage = () => {
             <LogOut size={18} className="relative z-10" />
             <span className="relative z-10">{lang === 'es' ? 'Cerrar sesión' : 'Sign out'}</span>
           </button>
+
+          <p className="text-white/50 text-xs text-center mt-2">
+            {lang === 'es'
+              ? 'Si crees que esto es un error, cierra sesión y vuelve a entrar.'
+              : 'If you believe this is a mistake, sign out and sign in again.'}
+          </p>
         </motion.div>
       </div>
 
