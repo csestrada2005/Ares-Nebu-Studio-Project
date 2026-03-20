@@ -85,7 +85,6 @@ export function StudioEngine() {
   // -------------------------------------------------------------------------
   // UI state
   // -------------------------------------------------------------------------
-  const [showTemplateSelector, setShowTemplateSelector] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
   const [showGraph, setShowGraph] = useState(false);
   const [showHamburger, setShowHamburger] = useState(false);
@@ -217,7 +216,6 @@ export function StudioEngine() {
         setCompiledHtml(html);
         if (!html.includes('Compilation Error')) {
           setHasValidPreview(true);
-          setShowTemplateSelector(false);
         }
       } catch (e: any) {
         console.error('[StudioEngine] Compile error:', e);
@@ -369,7 +367,6 @@ export function StudioEngine() {
     const template = TEMPLATES[templateKey];
     if (!template) return;
 
-    setShowTemplateSelector(false);
     const flatFiles = fileSystemTreeToMap(template);
 
     for (const [path, content] of flatFiles) {
@@ -872,7 +869,6 @@ export function StudioEngine() {
               setCompiledHtml(html);
               if (!html.includes('Compilation Error')) {
                 setHasValidPreview(true);
-                setShowTemplateSelector(false);
               }
             } catch (e) {
               console.error('[Restore] Compile error:', e);
