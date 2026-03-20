@@ -104,14 +104,14 @@ const PaymentDetailPanel = ({
       {/* Backdrop */}
       {isOpen && (
         <div
-          className="fixed inset-0 bg-black/40 z-30"
+          className="fixed inset-0 bg-black/60 backdrop-blur-sm z-30"
           onClick={onClose}
         />
       )}
 
       {/* Panel */}
       <div
-        className={`fixed top-0 right-0 h-full w-[380px] bg-card border-l border-border z-40 flex flex-col shadow-xl transition-transform duration-300 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
+        className={`fixed top-0 right-0 h-full w-[380px] bg-card border-l border-border shadow-2xl z-40 flex flex-col transition-transform duration-300 ${isOpen ? 'translate-x-0' : 'translate-x-full'}`}
       >
         {payment && (
           <>

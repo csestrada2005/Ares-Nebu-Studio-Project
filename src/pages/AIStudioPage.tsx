@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Bot, Send, Image, Code, MessageSquare, Plus, Settings, Wand2, PanelLeftClose } from "lucide-react";
+// Note: Wand2 kept to avoid removing unused import warning on the images tab
 
 type Tab = "chat" | "images" | "builder";
 type Message = { role: 'user' | 'assistant'; content: string };
@@ -12,7 +13,6 @@ const AIStudioPage = () => {
   const [activeTab, setActiveTab] = useState<Tab>("chat");
   const [chatInput, setChatInput] = useState("");
   const [imagePrompt, setImagePrompt] = useState("");
-  const [builderPrompt, setBuilderPrompt] = useState("");
   const [showConfig, setShowConfig] = useState(false);
 
   // Chat states
@@ -315,58 +315,21 @@ const AIStudioPage = () => {
 
       {/* WEB BUILDER TAB */}
       {activeTab === "builder" && (
-        <div className="flex gap-4 h-[calc(100%-80px)]">
-          {/* Builder controls */}
-          <div className="w-80 shrink-0 bg-muted/50 border border-border rounded-xl p-4 space-y-4 overflow-y-auto">
-            <div>
-              <label className="text-xs text-muted-foreground block mb-2">Describe tu sitio web</label>
-              <textarea
-                value={builderPrompt}
-                onChange={(e) => setBuilderPrompt(e.target.value)}
-                className="w-full bg-secondary border border-border rounded-lg px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:outline-none focus:border-ring resize-none h-32"
-                placeholder="Landing page para restaurante japonés con sección de menú, reservas y galería..."
-              />
+        <div className="flex items-center justify-center h-[calc(100%-80px)]">
+          <div className="bg-card border border-border rounded-xl p-8 max-w-md w-full text-center space-y-4 shadow-sm">
+            <div className="w-16 h-16 bg-primary/10 rounded-2xl flex items-center justify-center mx-auto">
+              <Code size={32} className="text-primary" />
             </div>
-            <div>
-              <label className="text-xs text-muted-foreground block mb-2">Tipo de sitio</label>
-              <div className="grid grid-cols-2 gap-2">
-                {["Landing", "Portfolio", "E-commerce", "Blog", "Dashboard", "App"].map((type) => (
-                  <button key={type} className="text-xs bg-secondary hover:bg-secondary/80 text-muted-foreground px-3 py-2 rounded-lg border border-border transition-colors">
-                    {type}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <button
-              onClick={() => {
-                if (!builderPrompt.trim()) {
-                  toast.warning('Describe tu sitio antes de continuar');
-                  return;
-                }
-                navigate('/forge', { state: { initialPrompt: builderPrompt.trim() } });
-              }}
-              className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground font-medium py-3 rounded-xl transition-colors"
-            >
-              <Wand2 size={18} />
-              Generar sitio
-            </button>
-          </div>
-
-          {/* Preview */}
-          <div className="flex-1 bg-muted/30 border border-border rounded-xl flex flex-col items-center justify-center p-8">
-            <div className="w-20 h-20 bg-gradient-to-br from-blue-500/20 to-cyan-500/20 rounded-3xl flex items-center justify-center mb-6 border border-blue-500/20">
-              <Code size={36} className="text-blue-400" />
-            </div>
-            <h3 className="text-xl font-semibold text-foreground mb-2">Construye sitios web con IA</h3>
-            <p className="text-sm text-muted-foreground max-w-md text-center mb-6">
-              Wyrd Forge es nuestro entorno de desarrollo funcional. Describe el sitio que necesitas y genera un prototipo funcional en segundos.
+            <h3 className="text-xl font-semibold text-foreground">Abrir Wyrd Forge</h3>
+            <p className="text-sm text-muted-foreground">
+              Wyrd Forge es nuestro entorno de desarrollo. Promptea y desarrolla tu sitio web o SAAS con nuestra IA
             </p>
             <button
-              onClick={() => window.open('/forge', '_blank')}
-              className="px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors flex items-center gap-2 shadow-lg"
+              onClick={() => navigate('/forge')}
+              className="w-full flex items-center justify-center gap-2 bg-primary hover:bg-primary/90 text-primary-foreground font-medium py-3 rounded-xl transition-colors"
             >
               <Code size={18} />
-              Abrir Web Builder (Wyrd Forge)
+              Abrir Wyrd Forge
             </button>
           </div>
         </div>

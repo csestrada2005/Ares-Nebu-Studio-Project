@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { Outlet, Navigate } from 'react-router-dom';
 import { LanguageProvider } from '@/contexts/LanguageContext';
 import { useAuth } from '@/contexts/AuthContext';
@@ -12,6 +12,21 @@ import PendingApprovalPage from '@/pages/PendingApprovalPage';
 export function WorkspaceLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const { user, loading, profile, pendingApproval } = useAuth();
+  // Tracks whether the first real Supabase profile fetch has completed.
+  // Prevents rendering SetupPage during the brief window where loading=false
+  // but the profile hasn't been fetched yet (warm-start from localStorage cache).
+  const profileFetchedOnce = useRef(false);
+  const [settled, setSettled] = useState(false);
+
+  useEffect(() => {
+    if (!loading && !profileFetchedOnce.current) {
+      profileFetchedOnce.current = true;
+      // Give a brief 500ms settling window so the real Supabase fetch can
+      // complete before we decide to show SetupPage.
+      const timer = setTimeout(() => setSettled(true), 500);
+      return () => clearTimeout(timer);
+    }
+  }, [loading]);
 
   // Safe to use plain `loading` here because AuthContext guarantees that
   // loading stays true until BOTH user AND profile are fully resolved.
@@ -19,7 +34,7 @@ export function WorkspaceLayout() {
   if (loading) {
     return (
       <div className="h-screen flex items-center justify-center bg-background">
-        <Loader2 size={28} className="animate-spin text-muted-foreground" />
+        <Loader2 size={28} className="animate-spin text-primary" />
       </div>
     );
   }
@@ -49,7 +64,16 @@ export function WorkspaceLayout() {
       );
     }
 
-    // Edge case: profile not loaded yet or truly misconfigured
+    // Edge case: profile not loaded yet or truly misconfigured.
+    // Only show SetupPage after the settling period to avoid a flash on reload.
+    if (!settled) {
+      return (
+        <div className="h-screen flex items-center justify-center bg-background">
+          <Loader2 size={28} className="animate-spin text-primary" />
+        </div>
+      );
+    }
+
     return (
       <LanguageProvider>
         <SetupPage />

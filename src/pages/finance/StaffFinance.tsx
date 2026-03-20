@@ -258,7 +258,7 @@ const StaffFinance = () => {
       <div className="rounded-xl bg-card border border-border overflow-hidden">
         {isLoading ? (
           <div className="flex items-center justify-center py-16">
-            <span className="w-6 h-6 border-2 border-muted border-t-muted-foreground rounded-full animate-spin" />
+            <span className="w-6 h-6 border-2 border-muted border-t-primary rounded-full animate-spin" />
           </div>
         ) : payments.length === 0 ? (
           <EmptyState
@@ -322,8 +322,8 @@ const StaffFinance = () => {
 
       {/* Add payment modal */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-card border border-border rounded-xl shadow-xl w-full max-w-md p-6">
+        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
+          <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md p-6">
             <h2 className="text-base font-semibold text-foreground mb-4">
               {labels.addPayment[lang]}
             </h2>

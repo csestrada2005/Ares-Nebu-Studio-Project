@@ -200,7 +200,7 @@ const DevDashboard = () => {
               />
             </div>
             {isLoading ? (
-              <Loader2 size={20} className="animate-spin text-muted-foreground" />
+              <Loader2 size={20} className="animate-spin text-primary" />
             ) : (
               <p className="text-2xl font-bold text-foreground">{kpi.value}</p>
             )}
@@ -224,7 +224,7 @@ const DevDashboard = () => {
           <div className="p-2">
             {isLoading ? (
               <div className="flex items-center justify-center py-10">
-                <Loader2 size={22} className="animate-spin text-muted-foreground" />
+                <Loader2 size={22} className="animate-spin text-primary" />
               </div>
             ) : recentProjects.length === 0 ? (
               <EmptyState
@@ -336,7 +336,7 @@ const DevDashboard = () => {
 
         {forgeLoading ? (
           <div className="flex items-center justify-center py-8">
-            <Loader2 size={22} className="animate-spin text-muted-foreground" />
+            <Loader2 size={22} className="animate-spin text-primary" />
           </div>
         ) : forgeProjects.length === 0 ? (
           <div className="rounded-xl bg-card border border-border p-8 flex flex-col items-center gap-3">
