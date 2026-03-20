@@ -50,6 +50,12 @@ interface ForgeStats {
   mostActiveProjects: { name: string; ai_call_count: number; last_active_at: string }[];
 }
 
+interface CreditStats {
+  revenueAllTime: number;
+  creditsSpentMTD: number;
+  activeWallets: number;
+}
+
 const AdminDashboard = () => {
   const { lang } = useLanguage();
   const navigate = useNavigate();
@@ -60,6 +66,8 @@ const AdminDashboard = () => {
   const [forgeVisitorsMTD, setForgeVisitorsMTD] = useState<number | string>('--');
   const [forgeStats, setForgeStats] = useState<ForgeStats | null>(null);
   const [forgeStatsLoading, setForgeStatsLoading] = useState(true);
+  const [creditStats, setCreditStats] = useState<CreditStats | null>(null);
+  const [creditStatsLoading, setCreditStatsLoading] = useState(true);
 
   useEffect(() => {
     let cancelled = false;
@@ -151,6 +159,62 @@ const AdminDashboard = () => {
       }
     };
     loadForgeStats();
+    return () => { cancelled = true; };
+  }, []);
+
+  // Credit revenue + usage stats
+  useEffect(() => {
+    let cancelled = false;
+    const loadCreditStats = async () => {
+      setCreditStatsLoading(true);
+      try {
+        const supabase = SupabaseService.getInstance().client;
+        const now = new Date();
+        const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+
+        const [
+          { data: purchaseData },
+          { data: spendData },
+          { count: activeWallets },
+        ] = await Promise.all([
+          supabase
+            .from('forge_credit_transactions')
+            .select('amount_credits')
+            .eq('type', 'purchase'),
+          supabase
+            .from('forge_credit_transactions')
+            .select('amount_credits')
+            .eq('type', 'spend')
+            .gte('created_at', startOfMonth),
+          supabase
+            .from('forge_credit_wallets')
+            .select('*', { count: 'exact', head: true })
+            .gt('balance_credits', 0),
+        ]);
+
+        const revenueAllTime = (purchaseData ?? []).reduce(
+          (sum: number, r: any) => sum + (r.amount_credits ?? 0) * 0.01,
+          0
+        );
+        const creditsSpentMTD = (spendData ?? []).reduce(
+          (sum: number, r: any) => sum + Math.abs(r.amount_credits ?? 0),
+          0
+        );
+
+        if (!cancelled) {
+          setCreditStats({
+            revenueAllTime,
+            creditsSpentMTD,
+            activeWallets: activeWallets ?? 0,
+          });
+        }
+      } catch {
+        // Tables may not exist yet — fail gracefully
+      } finally {
+        if (!cancelled) setCreditStatsLoading(false);
+      }
+    };
+    loadCreditStats();
     return () => { cancelled = true; };
   }, []);
 
@@ -313,6 +377,41 @@ const AdminDashboard = () => {
                 <Loader2 size={20} className="animate-spin text-muted-foreground" />
               ) : (
                 <p className="text-2xl font-bold text-foreground">{String(card.value)}</p>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Credit KPI cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
+          {[
+            {
+              label: { es: 'Ingresos créditos (total)', en: 'Credits Revenue (all time)' },
+              value: creditStats ? formatCurrency(creditStats.revenueAllTime, lang) : '--',
+              icon: DollarSign,
+            },
+            {
+              label: { es: 'Créditos gastados (mes)', en: 'Credits Spent (MTD)' },
+              value: creditStats ? creditStats.creditsSpentMTD.toLocaleString() : '--',
+              icon: Zap,
+            },
+            {
+              label: { es: 'Wallets activas', en: 'Active Wallets' },
+              value: creditStats ? String(creditStats.activeWallets) : '--',
+              icon: Users,
+            },
+          ].map((card) => (
+            <div key={card.label.es} className="rounded-xl p-5 bg-card border border-border">
+              <div className="flex items-center justify-between mb-3">
+                <span className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  {card.label[lang]}
+                </span>
+                <card.icon size={15} strokeWidth={1.5} className="text-muted-foreground" />
+              </div>
+              {creditStatsLoading ? (
+                <Loader2 size={20} className="animate-spin text-muted-foreground" />
+              ) : (
+                <p className="text-2xl font-bold text-foreground">{card.value}</p>
               )}
             </div>
           ))}

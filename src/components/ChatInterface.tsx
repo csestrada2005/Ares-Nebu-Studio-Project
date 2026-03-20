@@ -1,10 +1,12 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, Bot, Loader2, CheckCircle } from 'lucide-react';
+import { Send, Bot, Loader2, CheckCircle, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface Message {
   role: 'user' | 'assistant';
   content: string;
   warning?: string;
+  errorType?: 'insufficient_credits' | 'compile_error' | 'generic';
+  errorDetail?: string;
 }
 
 interface ChatInterfaceProps {
@@ -103,6 +105,26 @@ function BuildProgress({
   );
 }
 
+function CompileErrorDetail({ errorDetail }: { errorDetail: string }) {
+  const [expanded, setExpanded] = useState(false);
+  return (
+    <div className="mt-2">
+      <button
+        onClick={() => setExpanded(v => !v)}
+        className="flex items-center gap-1 text-xs text-gray-400 hover:text-gray-300 transition-colors"
+      >
+        {expanded ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
+        What went wrong?
+      </button>
+      {expanded && (
+        <pre className="mt-1 p-2 bg-gray-900 border border-gray-700 rounded text-[10px] text-red-300 overflow-x-auto whitespace-pre-wrap">
+          {errorDetail}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 export function ChatInterface({ isLoading, onSendMessage, selectedElement }: ChatInterfaceProps) {
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', content: 'Hello! How can I help you today?' }
@@ -127,16 +149,27 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
     scrollToBottom();
   }, [messages, isLoading]);
 
-  const buildAssistantMessage = (result: { success: boolean; modifiedFiles: string[]; error?: string; warning?: string }): { content: string; warning?: string } => {
-    let content: string;
+  const buildAssistantMessage = (result: { success: boolean; modifiedFiles: string[]; error?: string; warning?: string }): { content: string; warning?: string; errorType?: 'insufficient_credits' | 'compile_error' | 'generic'; errorDetail?: string } => {
     if (!result.success) {
-      content = 'Sorry, something went wrong processing your request.';
-    } else if (result.modifiedFiles.length > 0) {
-      content = `Done. Modified: ${result.modifiedFiles.join(', ')}`;
-    } else {
-      content = 'Done — no files needed changing.';
+      if (result.error === 'INSUFFICIENT_CREDITS') {
+        return {
+          content: "You've used your free build. Top up credits to continue building.",
+          errorType: 'insufficient_credits',
+        };
+      }
+      if (result.error && result.error.length > 0) {
+        return {
+          content: "The AI couldn't fix the compile error after 3 attempts. Your last working version is preserved.",
+          errorType: 'compile_error',
+          errorDetail: result.error.slice(-200),
+        };
+      }
+      return { content: 'Sorry, something went wrong processing your request.', errorType: 'generic' };
     }
-    return { content, warning: result.warning };
+    if (result.modifiedFiles.length > 0) {
+      return { content: `Done. Modified: ${result.modifiedFiles.join(', ')}`, warning: result.warning };
+    }
+    return { content: 'Done — no files needed changing.', warning: result.warning };
   };
 
   const handleSend = async () => {
@@ -187,24 +220,27 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
       if (result.success) {
         setProgressLines([{ text: `Modified ${result.modifiedFiles.length} files in ${elapsedSeconds}s`, status: 'done' }]);
         setTimeout(() => setProgressLines([]), 4000);
+        window.dispatchEvent(new CustomEvent('forge:credits-updated'));
       } else {
         setProgressLines(prev => {
           const next = [...prev];
           if (next.length > 0) {
             next[next.length - 1].status = 'error';
           }
-          next.push({ text: 'Failed after 3 retries', status: 'error' });
+          if (result.error !== 'INSUFFICIENT_CREDITS') {
+            next.push({ text: 'Failed after 3 retries', status: 'error' });
+          }
           return next;
         });
-        if (result.error) {
+        if (result.error && result.error !== 'INSUFFICIENT_CREDITS') {
           setLastError(result.error);
         }
       }
 
-      const { content, warning } = buildAssistantMessage(result);
+      const { content, warning, errorType, errorDetail } = buildAssistantMessage(result);
       setMessages(prev => [
         ...prev,
-        { role: 'assistant', content, warning }
+        { role: 'assistant', content, warning, errorType, errorDetail }
       ]);
     } catch (error) {
       clearInterval(intervalId);
@@ -247,12 +283,19 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
               className={`max-w-[85%] rounded-lg p-3 text-sm ${
                 msg.role === 'user'
                   ? 'bg-red-600 text-white'
+                  : msg.errorType === 'insufficient_credits'
+                  ? 'bg-amber-900/40 border border-amber-600/50 text-amber-200'
+                  : msg.errorType === 'compile_error'
+                  ? 'bg-gray-800 text-gray-200'
                   : 'bg-gray-800 text-gray-200'
               }`}
             >
               {msg.content}
               {msg.warning && (
                 <p className="text-yellow-400 text-xs mt-2">⚠️ {msg.warning}</p>
+              )}
+              {msg.errorType === 'compile_error' && msg.errorDetail && (
+                <CompileErrorDetail errorDetail={msg.errorDetail} />
               )}
             </div>
           </div>
@@ -285,7 +328,7 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
             </span>
           </div>
         )}
-        {!isLoading && input === '' && (
+        {input === '' && (
           <div className="mb-3 flex flex-wrap gap-2">
             {[
               '✨ Build a Pipeline View for Leads',
@@ -294,22 +337,24 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
             ].map((suggestion) => (
               <button
                 key={suggestion}
+                disabled={isLoading}
                 onClick={() => {
+                  if (isLoading) return;
                   setInput(suggestion);
                   setTimeout(() => {
                     const trimmed = suggestion.trim();
                     setInput('');
                     setMessages(prev => [...prev, { role: 'user', content: trimmed }]);
                     onSendMessage(trimmed).then((result) => {
-                      const { content, warning } = buildAssistantMessage(result);
+                      const { content, warning, errorType, errorDetail } = buildAssistantMessage(result);
                       setMessages(prev => [
                         ...prev,
-                        { role: 'assistant', content, warning },
+                        { role: 'assistant', content, warning, errorType, errorDetail },
                       ]);
                     });
                   }, 0);
                 }}
-                className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-red-500/50 text-gray-300 hover:text-white rounded-full text-xs transition-colors truncate max-w-full"
+                className="px-3 py-1.5 bg-gray-800 hover:bg-gray-700 border border-gray-700 hover:border-red-500/50 text-gray-300 hover:text-white rounded-full text-xs transition-colors truncate max-w-full disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {suggestion}
               </button>

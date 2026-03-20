@@ -109,6 +109,72 @@ async function requireAuth(req, res, next) {
   }
 }
 
+// ---------------------------------------------------------------------------
+// Stripe webhook — must be registered BEFORE auth middleware and json parser
+// because it needs raw body for signature verification
+// ---------------------------------------------------------------------------
+app.post('/api/credits/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  const STRIPE_SECRET_KEY_WH = process.env.STRIPE_SECRET_KEY;
+  const STRIPE_WEBHOOK_SECRET_WH = process.env.STRIPE_WEBHOOK_SECRET;
+
+  if (!STRIPE_SECRET_KEY_WH || !STRIPE_WEBHOOK_SECRET_WH) {
+    return res.status(503).json({ error: 'Payments not configured' });
+  }
+
+  const sig = req.headers['stripe-signature'];
+  let event;
+
+  try {
+    const { default: Stripe } = await import('stripe');
+    const stripe = new Stripe(STRIPE_SECRET_KEY_WH);
+    event = stripe.webhooks.constructEvent(req.body, sig, STRIPE_WEBHOOK_SECRET_WH);
+  } catch (err) {
+    console.error('[Stripe] Webhook signature verification failed:', err.message);
+    return res.status(400).json({ error: 'Webhook signature invalid' });
+  }
+
+  if (event.type === 'checkout.session.completed') {
+    const session = event.data.object;
+    const { userId, credits } = session.metadata || {};
+
+    if (userId && credits && supabaseAdmin) {
+      const creditsNum = parseInt(credits, 10);
+      try {
+        await supabaseAdmin.from('forge_credit_transactions').insert({
+          user_id: userId,
+          project_id: null,
+          type: 'purchase',
+          amount_credits: creditsNum,
+          cost_usd: session.amount_total ? session.amount_total / 100 : null,
+          stripe_payment_intent_id: session.payment_intent,
+          tokens_input: 0,
+          tokens_output: 0,
+        });
+
+        const { data: wallet } = await supabaseAdmin
+          .from('forge_credit_wallets')
+          .select('balance_credits')
+          .eq('user_id', userId)
+          .single();
+
+        const currentBalance = wallet?.balance_credits ?? 0;
+        await supabaseAdmin.from('forge_credit_wallets').upsert({
+          user_id: userId,
+          balance_credits: currentBalance + creditsNum,
+          free_prompt_used: true,
+        });
+
+        console.log(`[Stripe] Credited ${creditsNum} credits to user ${userId}`);
+      } catch (err) {
+        console.error('[Stripe] Failed to process webhook:', err);
+        return res.status(500).json({ error: 'Failed to process payment' });
+      }
+    }
+  }
+
+  res.status(200).send('OK');
+});
+
 // Apply auth middleware to all /api/* routes
 app.use('/api/', requireAuth);
 
@@ -816,6 +882,61 @@ app.delete('/api/email/:projectId/templates/:templateId', async (req, res) => {
   if (!supabaseAdmin) return res.status(503).json({ error: 'Database not configured' });
   await supabaseAdmin.from('forge_email_templates').delete().eq('id', templateId);
   res.status(204).send();
+});
+
+// ---------------------------------------------------------------------------
+// Phase 6: Stripe credit checkout
+// ---------------------------------------------------------------------------
+
+// POST /api/credits/checkout — create a Stripe checkout session
+app.post('/api/credits/checkout', async (req, res) => {
+  const stripeKey = process.env.STRIPE_SECRET_KEY;
+  if (!stripeKey) {
+    return res.status(503).json({ error: 'Payments not configured' });
+  }
+  if (!supabaseAdmin) {
+    return res.status(503).json({ error: 'Database not configured' });
+  }
+
+  const { packageId, userId } = req.body;
+  if (!packageId || !userId) {
+    return res.status(400).json({ error: 'packageId and userId are required' });
+  }
+
+  try {
+    const { data: pkg, error: pkgError } = await supabaseAdmin
+      .from('forge_credit_packages')
+      .select('*')
+      .eq('id', packageId)
+      .single();
+
+    if (pkgError || !pkg) {
+      return res.status(404).json({ error: 'Package not found' });
+    }
+
+    if (!pkg.stripe_price_id) {
+      return res.status(400).json({ error: 'Package has no Stripe price configured' });
+    }
+
+    const { default: Stripe } = await import('stripe');
+    const stripe = new Stripe(stripeKey);
+    const session = await stripe.checkout.sessions.create({
+      mode: 'payment',
+      line_items: [{ price: pkg.stripe_price_id, quantity: 1 }],
+      success_url: (process.env.APP_URL || 'http://localhost:3000') + '/forge?checkout=success',
+      cancel_url: (process.env.APP_URL || 'http://localhost:3000') + '/forge',
+      metadata: {
+        userId,
+        packageId,
+        credits: String(pkg.credits ?? 0),
+      },
+    });
+
+    res.json({ checkoutUrl: session.url });
+  } catch (err) {
+    console.error('[Stripe] Checkout error:', err);
+    res.status(500).json({ error: 'Failed to create checkout session' });
+  }
 });
 
 // ---------------------------------------------------------------------------
