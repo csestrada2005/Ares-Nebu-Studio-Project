@@ -125,6 +125,12 @@ export const injectDataIds = (code: string, filePath: string): string => {
   }
 };
 
+const CONFLICT_PREFIXES = [
+  'translate-x-', 'translate-y-',
+  'ml-', 'mt-',
+  'left-', 'top-',
+];
+
 export const updateCode = (
   fileContent: string,
   target: TargetElement,
@@ -178,14 +184,20 @@ export const updateCode = (
                      currentClass = classNameAttr.value.value;
                  }
                  if (currentClass) {
-                     const existingClasses = new Set(currentClass.split(/\s+/).filter(Boolean));
                      const newClasses = newClassName.split(/\s+/).filter(Boolean);
-                     const toAdd = newClasses.filter(c => !existingClasses.has(c));
-                     if (toAdd.length > 0) {
-                         finalClass = `${currentClass} ${toAdd.join(' ')}`.trim();
-                     } else {
-                         finalClass = currentClass;
+                     // Remove existing classes that conflict with new ones by prefix
+                     let existingClasses = currentClass.split(/\s+/).filter(Boolean);
+                     for (const newClass of newClasses) {
+                         const conflictPrefix = CONFLICT_PREFIXES.find(p => newClass.startsWith(p));
+                         if (conflictPrefix) {
+                             existingClasses = existingClasses.filter(c => !c.startsWith(conflictPrefix));
+                         }
                      }
+                     const existingSet = new Set(existingClasses);
+                     const toAdd = newClasses.filter(c => !existingSet.has(c));
+                     finalClass = toAdd.length > 0
+                         ? `${existingClasses.join(' ')} ${toAdd.join(' ')}`.trim()
+                         : existingClasses.join(' ').trim();
                  }
             }
 

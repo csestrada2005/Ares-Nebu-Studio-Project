@@ -67,6 +67,7 @@ interface PlatformUsage {
   totalActiveForgeProjects: number;
 }
 
+// This dashboard is admin-only. All queries are platform-wide and depend on RLS admin bypass or service role access.
 const AdminDashboard = () => {
   const { lang } = useLanguage();
   const navigate = useNavigate();

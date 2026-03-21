@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react';
 import { Eye, EyeOff, Plus, Trash2, Save, Cloud, CheckCircle, Circle, Loader2 } from 'lucide-react';
 import { SupabaseService } from '@/services/SupabaseService';
-import { webContainerService } from '@/services/WebContainerService';
 import { platformService } from '@/services/PlatformService';
+import { toast } from 'sonner';
 
 interface Secret {
   key: string;
@@ -10,7 +10,7 @@ interface Secret {
 }
 
 interface SecretsPanelProps {
-  projectId: string | null;
+  projectId: string | null | undefined;
 }
 
 const PLATFORM_MANAGED_KEYS = new Set([
@@ -38,7 +38,6 @@ export function SecretsPanel({ projectId }: SecretsPanelProps) {
   const [newValue, setNewValue] = useState('');
   const [showValues, setShowValues] = useState<Record<number, boolean>>({});
   const [isSaving, setIsSaving] = useState(false);
-  const [isCloud, setIsCloud] = useState(false);
   const [platformServices, setPlatformServices] = useState<Record<string, boolean> | null>(null);
   const [loadingPlatform, setLoadingPlatform] = useState(true);
 
@@ -51,51 +50,43 @@ export function SecretsPanel({ projectId }: SecretsPanelProps) {
   }, [projectId]);
 
   const loadSecrets = async () => {
-    if (projectId) {
-      try {
-        const supabase = SupabaseService.getInstance().client;
-        const { data } = await supabase
-          .from('forge_secrets')
-          .select('key, value')
-          .eq('project_id', projectId)
-          .order('key');
-        if (data) {
-          // Filter out platform-managed keys from display
-          setSecrets(data.filter((s: Secret) => !PLATFORM_MANAGED_KEYS.has(s.key)));
-          setIsCloud(true);
-          return;
-        }
-      } catch {
-        // fallback to localStorage
+    if (!projectId) {
+      setSecrets([]);
+      return;
+    }
+    try {
+      const supabase = SupabaseService.getInstance().client;
+      const { data } = await supabase
+        .from('forge_secrets')
+        .select('key, value')
+        .eq('project_id', projectId)
+        .order('key');
+      if (data) {
+        setSecrets(data.filter((s: Secret) => !PLATFORM_MANAGED_KEYS.has(s.key)));
       }
+    } catch (e) {
+      console.error('[SecretsPanel] load error:', e);
     }
-    const stored = localStorage.getItem('secrets');
-    if (stored) {
-      try {
-        const parsed: Secret[] = JSON.parse(stored);
-        setSecrets(parsed.filter(s => !PLATFORM_MANAGED_KEYS.has(s.key)));
-      } catch { /* ignore */ }
-    }
-    setIsCloud(false);
   };
 
   const saveSecrets = async () => {
+    if (!projectId) {
+      toast.error('Save your project first to enable secret storage.');
+      return;
+    }
     setIsSaving(true);
     try {
-      if (projectId) {
-        const supabase = SupabaseService.getInstance().client;
-        for (const s of secrets) {
-          await supabase.from('forge_secrets').upsert(
-            { project_id: projectId, key: s.key, value: s.value },
-            { onConflict: 'project_id,key' }
-          );
-        }
-      } else {
-        localStorage.setItem('secrets', JSON.stringify(secrets));
+      const supabase = SupabaseService.getInstance().client;
+      for (const s of secrets) {
+        await supabase.from('forge_secrets').upsert(
+          { project_id: projectId, key: s.key, value: s.value },
+          { onConflict: 'project_id,key' }
+        );
       }
-      const env: Record<string, string> = {};
-      secrets.forEach(s => { if (s.key) env[s.key] = s.value; });
-      webContainerService.setEnv(env);
+      toast.success('Secrets saved');
+    } catch (e) {
+      console.error('[SecretsPanel] save error:', e);
+      toast.error('Failed to save secrets');
     } finally {
       setIsSaving(false);
     }
@@ -133,6 +124,14 @@ export function SecretsPanel({ projectId }: SecretsPanelProps) {
 
   return (
     <div className="space-y-6">
+      {/* Banner when no project is open */}
+      {!projectId && (
+        <div className="bg-amber-900/20 border border-amber-700/40 rounded-xl p-4 text-sm text-amber-300 flex items-center gap-2">
+          <Cloud size={16} />
+          Secrets are stored securely per project. Open a project to manage secrets.
+        </div>
+      )}
+
       {/* Platform services (read-only) */}
       <div className="bg-blue-950/30 rounded-xl p-4 border border-blue-800/40">
         <h3 className="text-sm font-semibold text-blue-300 mb-3">Platform Services</h3>
@@ -159,24 +158,10 @@ export function SecretsPanel({ projectId }: SecretsPanelProps) {
         <p className="text-xs text-zinc-600 mt-3">Platform keys are managed server-side and never exposed to the client.</p>
       </div>
 
-      {!projectId && (
-        <div className="bg-amber-900/20 border border-amber-700/40 rounded-xl p-3 text-sm text-amber-300 flex items-center gap-2">
-          <Cloud size={14} />
-          Save your project to enable cloud secrets sync.
-        </div>
-      )}
-
-      {isCloud && (
-        <div className="flex items-center gap-2 text-xs text-emerald-400">
-          <Cloud size={12} />
-          Synced to cloud
-        </div>
-      )}
-
       {/* User-managed secrets */}
       <div className="bg-zinc-800/50 rounded-lg p-4 border border-zinc-700">
         <p className="text-sm text-zinc-400 mb-1">
-          Project secrets (e.g. <code>GITHUB_TOKEN</code>, custom API keys) are injected into the WebContainer.
+          Project secrets (e.g. <code>GITHUB_TOKEN</code>, custom API keys) are stored securely per project.
         </p>
         <div className="flex gap-2 mb-4 mt-4">
           <input

@@ -2,7 +2,6 @@ import { useState, useRef, useEffect } from 'react';
 import { useAuth } from '@/contexts/AuthContext';
 import { Loader2 } from 'lucide-react';
 import { motion, useMotionValue, useSpring, useReducedMotion } from 'framer-motion';
-import { LoadingScreen } from './LoadingScreen';
 
 // Botón Magnético para Google Auth
 const MagneticLoginBtn = ({ onClick }: { onClick: () => void }) => {
@@ -85,7 +84,6 @@ const SumiHeroReveal = () => {
 
 export const Login = () => {
   const { signInWithGoogle, loading } = useAuth();
-  const [showLoading, setShowLoading] = useState(true);
 
   if (loading) {
     return (
@@ -93,10 +91,6 @@ export const Login = () => {
         <Loader2 className="animate-spin h-8 w-8 text-[#E60000]" />
       </div>
     );
-  }
-
-  if (showLoading) {
-    return <LoadingScreen onComplete={() => setShowLoading(false)} />;
   }
 
   return (

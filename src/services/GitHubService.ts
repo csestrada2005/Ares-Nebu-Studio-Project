@@ -1,31 +1,19 @@
 import { Octokit } from '@octokit/rest';
 import type { FileSystemTree } from '@webcontainer/api';
-import { webContainerService } from './WebContainerService';
 
 export class GitHubService {
   private octokit: Octokit | null = null;
 
   private getOctokit() {
-    // Always refresh env in case secrets changed
-    const env = webContainerService.getEnv() || {};
-    const token = env.GITHUB_TOKEN;
-    if (!token) {
-      // Fallback to localStorage if not in memory service (e.g. refresh)
-      const stored = localStorage.getItem('secrets');
-      if (stored) {
-          try {
-              const secrets = JSON.parse(stored);
-              const ghSecret = secrets.find((s: any) => s.key === 'GITHUB_TOKEN');
-              if (ghSecret) return new Octokit({ auth: ghSecret.value });
-          } catch (e) {}
-      }
-      throw new Error('GITHUB_TOKEN not found in secrets. Please add it in Settings.');
+    const stored = localStorage.getItem('secrets');
+    if (stored) {
+        try {
+            const secrets = JSON.parse(stored);
+            const ghSecret = secrets.find((s: any) => s.key === 'GITHUB_TOKEN');
+            if (ghSecret) return new Octokit({ auth: ghSecret.value });
+        } catch (e) {}
     }
-
-    if (!this.octokit) {
-        this.octokit = new Octokit({ auth: token });
-    }
-    return this.octokit;
+    throw new Error('GITHUB_TOKEN not found in secrets. Please add it in Settings.');
   }
 
   async pushToRepo(repoName: string, branch: string, fileTree: FileSystemTree, message: string = 'Update from Open Lovable Builder') {

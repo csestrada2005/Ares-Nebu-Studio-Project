@@ -83,7 +83,8 @@ app.use((req, res, next) => {
 });
 
 // ---------------------------------------------------------------------------
-// Auth middleware — validates Supabase session for all /api/* routes
+// Auth middleware — validates Supabase session for all /api/* routes.
+// All /api/* routes require auth. Ownership checks are done per-endpoint.
 // ---------------------------------------------------------------------------
 async function requireAuth(req, res, next) {
   const authHeader = req.headers['authorization'];

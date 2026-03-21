@@ -209,6 +209,12 @@ export function StudioEngine() {
   useEffect(() => {
     if (files.size === 0) return;
 
+    // Guard: if last change was from a visual edit, we already compiled immediately — skip debounce
+    if (lastChangeSource.current === 'user') {
+      lastChangeSource.current = 'ai';
+      return;
+    }
+
     const timer = setTimeout(async () => {
       setIsCompiling(true);
       try {
@@ -414,6 +420,13 @@ export function StudioEngine() {
     });
     updateLocalFile(ACTIVE_FILE_PATH, newCode);
     await saveFile(ACTIVE_FILE_PATH, newCode);
+
+    const updatedMap = new Map(files);
+    updatedMap.set(ACTIVE_FILE_PATH, newCode);
+    compile(updatedMap).then(html => {
+      setCompiledHtml(html);
+      if (!html.includes('Compilation Error')) setHasValidPreview(true);
+    }).catch(e => console.error('[StudioEngine] immediate compile error:', e));
   };
 
   const handleClassUpdate = async (newClassName: string) => {
@@ -427,6 +440,13 @@ export function StudioEngine() {
     });
     updateLocalFile(ACTIVE_FILE_PATH, newCode);
     await saveFile(ACTIVE_FILE_PATH, newCode);
+
+    const updatedMap = new Map(files);
+    updatedMap.set(ACTIVE_FILE_PATH, newCode);
+    compile(updatedMap).then(html => {
+      setCompiledHtml(html);
+      if (!html.includes('Compilation Error')) setHasValidPreview(true);
+    }).catch(e => console.error('[StudioEngine] immediate compile error:', e));
 
     setSelectedElement(prev => prev ? { ...prev, className: newClassName } : null);
   };
@@ -443,6 +463,7 @@ export function StudioEngine() {
   };
 
   const handleStyleUpdate = async (newStyles: Record<string, string>) => {
+    lastChangeSource.current = 'user';
     if (!selectedElement) return;
     let currentClass = selectedElement.className || '';
     const newClassSegment = Object.values(newStyles).join(' ');
@@ -456,6 +477,13 @@ export function StudioEngine() {
 
     const finalClass = `${currentClass} ${newClassSegment}`.trim();
     await handleClassUpdate(finalClass);
+
+    const updatedMap = new Map(files);
+    updatedMap.set(ACTIVE_FILE_PATH, files.get(ACTIVE_FILE_PATH) ?? '');
+    compile(updatedMap).then(html => {
+      setCompiledHtml(html);
+      if (!html.includes('Compilation Error')) setHasValidPreview(true);
+    }).catch(e => console.error('[StudioEngine] immediate compile error:', e));
   };
 
   // -------------------------------------------------------------------------

@@ -161,6 +161,15 @@ export function PreviewOverlay({ iframeRef, onElementSelect, editMode, onUpdateS
              if (proxyRef.current) {
                proxyRef.current.style.transform = '';
              }
+
+             // Re-query element position after iframe re-renders so selection box snaps to new position.
+             setTimeout(() => {
+               iframeRef.current?.contentWindow?.postMessage({
+                 type: 'find-element-at-point',
+                 x: selectedRect ? selectedRect.left + selectedRect.width / 2 : 0,
+                 y: selectedRect ? selectedRect.top + selectedRect.height / 2 : 0,
+               }, '*');
+             }, 500);
         }
     }
   };
