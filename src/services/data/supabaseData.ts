@@ -30,9 +30,11 @@ export const fetchProfile = async (id: string): Promise<Profile | null> => {
 };
 
 export const getRecentProjects = async (): Promise<Project[]> => {
+  const { data: { user } } = await supabase.auth.getUser();
   const { data, error } = await supabase
     .from('projects')
     .select('*')
+    .eq('user_id', user?.id ?? '')
     .order('created_at', { ascending: false })
     .limit(5);
 
@@ -49,29 +51,36 @@ export const getDashboardKPIs = async (): Promise<DashboardKPIs> => {
     const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
     const startOfNextMonth = new Date(now.getFullYear(), now.getMonth() + 1, 1).toISOString();
 
+    const { data: { user } } = await supabase.auth.getUser();
+    const userId = user?.id ?? '';
+
     const [activeProjectsRes, monthlyRevenueRes, pendingPaymentsRes, pipelineLeadsRes] =
       await Promise.all([
         supabase
           .from('projects')
           .select('id', { count: 'exact', head: true })
-          .eq('status', 'active'),
+          .eq('status', 'active')
+          .eq('user_id', userId),
 
         supabase
           .from('payments')
           .select('amount')
           .eq('status', 'paid')
+          .eq('user_id', userId)
           .gte('created_at', startOfMonth)
           .lt('created_at', startOfNextMonth),
 
         supabase
           .from('payments')
           .select('amount')
-          .eq('status', 'pending'),
+          .eq('status', 'pending')
+          .eq('user_id', userId),
 
         supabase
           .from('contacts')
           .select('id', { count: 'exact', head: true })
-          .eq('type', 'lead'),
+          .eq('type', 'lead')
+          .eq('user_id', userId),
       ]);
 
     if (activeProjectsRes.error) console.error('Error fetching active projects count:', activeProjectsRes.error);
@@ -101,6 +110,7 @@ export const getDashboardKPIs = async (): Promise<DashboardKPIs> => {
   }
 };
 
+// Admin only — fetches platform-wide data, protected by RLS admin role check.
 export const getAdminKPIs = async (): Promise<AdminKPIs> => {
   try {
     const now = new Date();
@@ -222,6 +232,7 @@ export const getClientPayments = async (projectIds: string[]): Promise<Payment[]
   return (data ?? []) as Payment[];
 };
 
+// Scoped to current user via RLS policy. No explicit filter needed.
 export const getContacts = async (
   page: number = 1,
   pageSize: number = 20,
@@ -317,6 +328,7 @@ export const deleteContact = async (id: string): Promise<boolean> => {
 // Used internally by project queries
 type ProjectWithClient = Project & { contacts: { name: string } | null };
 
+// Scoped to current user via RLS policy. No explicit filter needed.
 export const getProjects = async (
   page: number = 1,
   pageSize: number = 20,
@@ -428,6 +440,7 @@ export const deleteProject = async (id: string): Promise<boolean> => {
 
 type PaymentWithProject = Payment & { projects: { title: string } | null };
 
+// Scoped to current user via RLS policy. No explicit filter needed.
 export const getPayments = async (
   page: number = 1,
   pageSize: number = 20,

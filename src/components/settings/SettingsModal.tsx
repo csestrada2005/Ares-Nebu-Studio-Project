@@ -1,6 +1,5 @@
-import { useState, useEffect } from 'react';
-import { X, Lock, Github, Rocket, Eye, EyeOff, Plus, Trash2, Save, Database, Globe, Mail, BarChart3 } from 'lucide-react';
-import { webContainerService } from '../../services/WebContainerService';
+import { useState } from 'react';
+import { X, Lock, Github, Rocket, Database, Globe, Mail, BarChart3 } from 'lucide-react';
 import { DeployManager } from '../deploy/DeployManager';
 import { gitHubService } from '../../services/GitHubService';
 import type { FileSystemTree } from '@webcontainer/api';
@@ -25,23 +24,8 @@ interface SettingsModalProps {
   projectId?: string | null;
 }
 
-interface Secret {
-  key: string;
-  value: string;
-}
-
 type MainTab = 'secrets' | 'github' | 'deploy' | 'domains' | 'database' | 'email' | 'analytics';
 type DbSubTab = 'overview' | 'schema' | 'users' | 'sql' | 'functions' | 'logs' | 'secrets' | 'usage';
-
-const PLATFORM_MANAGED_KEYS = new Set([
-  'ANTHROPIC_API_KEY',
-  'GOOGLE_API_KEY',
-  'GOOGLE_PSI_KEY',
-  'VERCEL_TOKEN',
-  'CLOUDFLARE_API_KEY',
-  'RESEND_API_KEY',
-  'SUPABASE_SERVICE_ROLE_KEY',
-]);
 
 const DB_SUB_TABS: { id: DbSubTab; label: string }[] = [
   { id: 'overview', label: 'Overview' },
@@ -73,54 +57,12 @@ export function SettingsModal({ onClose, fileTree, files, projectId: propProject
     setDateRange({ start, end });
   };
 
-  // Secrets State (user-managed only)
-  const [secrets, setSecrets] = useState<Secret[]>([]);
-  const [newKey, setNewKey] = useState('');
-  const [newValue, setNewValue] = useState('');
-  const [showValues, setShowValues] = useState<Record<number, boolean>>({});
-
   // GitHub State
   const [repoName, setRepoName] = useState('');
   const [branch, setBranch] = useState('main');
   const [commitMessage, setCommitMessage] = useState('Update from Open Lovable Builder');
   const [isPushing, setIsPushing] = useState(false);
   const [pushStatus, setPushStatus] = useState<{ success: boolean; message: string } | null>(null);
-
-  useEffect(() => {
-    const stored = localStorage.getItem('secrets');
-    if (stored) {
-      try {
-        const parsed: Secret[] = JSON.parse(stored);
-        setSecrets(parsed.filter(s => !PLATFORM_MANAGED_KEYS.has(s.key)));
-      } catch (e) {
-        console.error('Failed to parse secrets', e);
-      }
-    }
-  }, []);
-
-  const handleSaveSecrets = () => {
-    localStorage.setItem('secrets', JSON.stringify(secrets));
-    const env: Record<string, string> = {};
-    secrets.forEach(s => { if (s.key) env[s.key] = s.value; });
-    webContainerService.setEnv(env);
-  };
-
-  const addSecret = () => {
-    if (!newKey.trim()) return;
-    if (PLATFORM_MANAGED_KEYS.has(newKey.trim())) {
-      alert(`"${newKey.trim()}" is platform-managed and cannot be added here.`);
-      return;
-    }
-    setSecrets([...secrets, { key: newKey.trim(), value: newValue }]);
-    setNewKey('');
-    setNewValue('');
-  };
-
-  const removeSecret = (index: number) => {
-    const newSecrets = [...secrets];
-    newSecrets.splice(index, 1);
-    setSecrets(newSecrets);
-  };
 
   const handleGitHubPush = async () => {
     setIsPushing(true);
@@ -169,70 +111,7 @@ export function SettingsModal({ onClose, fileTree, files, projectId: propProject
         <div className="flex-1 overflow-y-auto min-h-0 pr-2 custom-scrollbar">
           {/* Secrets tab */}
           {activeTab === 'secrets' && (
-            <div className="space-y-6">
-              <div className="bg-gray-950/50 rounded-lg p-4 border border-gray-800">
-                <p className="text-sm text-gray-400 mb-4">
-                  User-managed secrets (e.g. <code>GITHUB_TOKEN</code>) are stored locally and injected into the WebContainer.
-                  Platform keys (Anthropic, Vercel, etc.) are managed server-side.
-                </p>
-
-                <div className="flex gap-2 mb-4">
-                  <input
-                    type="text"
-                    placeholder="KEY (e.g. GITHUB_TOKEN)"
-                    value={newKey}
-                    onChange={(e) => setNewKey(e.target.value)}
-                    className="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-primary focus:outline-none"
-                  />
-                  <input
-                    type="password"
-                    placeholder="VALUE"
-                    value={newValue}
-                    onChange={(e) => setNewValue(e.target.value)}
-                    className="flex-1 bg-gray-900 border border-gray-700 rounded px-3 py-2 text-sm text-white focus:border-primary focus:outline-none"
-                  />
-                  <button
-                    onClick={addSecret}
-                    disabled={!newKey.trim()}
-                    className="px-4 py-2 bg-primary hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed text-white rounded text-sm font-medium transition-colors flex items-center gap-2"
-                  >
-                    <Plus size={16} />
-                    Add
-                  </button>
-                </div>
-              </div>
-
-              <div className="space-y-2">
-                {secrets.length === 0 ? (
-                  <div className="text-center text-gray-500 py-4">No user secrets added yet.</div>
-                ) : (
-                  secrets.map((secret, index) => (
-                    <div key={index} className="flex items-center gap-2 bg-gray-800/50 p-3 rounded border border-gray-800 group hover:border-gray-700 transition-colors">
-                      <div className="flex-1 font-mono text-sm text-blue-400 truncate" title={secret.key}>
-                        {secret.key}
-                      </div>
-                      <div className="flex items-center gap-2 bg-gray-900 px-2 py-1 rounded border border-gray-800 max-w-[200px]">
-                        <span className="font-mono text-xs text-gray-300 truncate">
-                          {showValues[index] ? secret.value : '••••••••••••••••'}
-                        </span>
-                        <button
-                          onClick={() => setShowValues(prev => ({ ...prev, [index]: !prev[index] }))}
-                          className="text-gray-500 hover:text-white transition-colors"
-                        >
-                          {showValues[index] ? <EyeOff size={12} /> : <Eye size={12} />}
-                        </button>
-                      </div>
-                      <button
-                        onClick={() => removeSecret(index)}
-                        className="p-2 text-gray-500 hover:text-red-400 transition-colors opacity-0 group-hover:opacity-100"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
+            <SecretsPanel projectId={projectId} />
           )}
 
           {/* GitHub tab */}
@@ -361,15 +240,6 @@ export function SettingsModal({ onClose, fileTree, files, projectId: propProject
         </div>
 
         <div className="flex justify-end gap-3 pt-4 border-t border-gray-800 mt-4">
-          {activeTab === 'secrets' && (
-            <button
-              onClick={handleSaveSecrets}
-              className="px-6 py-2 bg-primary hover:bg-primary/90 text-white rounded text-sm font-medium transition-colors flex items-center gap-2 shadow-lg shadow-green-900/20"
-            >
-              <Save size={16} />
-              Save Secrets
-            </button>
-          )}
           <button onClick={onClose} className="px-4 py-2 text-gray-400 hover:text-white text-sm font-medium transition-colors">
             Close
           </button>

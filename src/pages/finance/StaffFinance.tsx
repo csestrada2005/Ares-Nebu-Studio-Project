@@ -1,8 +1,6 @@
 import { useState, useEffect } from 'react';
 import { toast } from 'sonner';
 import { DollarSign, TrendingUp, Clock, AlertCircle, Receipt } from 'lucide-react';
-import { SupabaseService } from '@/services/SupabaseService';
-import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -21,14 +19,12 @@ import {
   getPayments,
   getProjectsForPaymentDropdown,
   getStaffFinanceKPIs,
-  createPayment,
   updatePayment,
   deletePayment,
 } from '@/services/data/supabaseData';
 import { usePagination } from '@/hooks/usePagination';
 import type { Payment } from '@/types';
 import PaymentDetailPanel from './PaymentDetailPanel';
-import PaymentForm from './PaymentForm';
 
 type PaymentWithProject = Payment & { projects: { title: string } | null; user_id?: string | null };
 
@@ -69,10 +65,8 @@ const StaffFinance = () => {
   const [projects, setProjects] = useState<{ id: string; title: string }[]>([]);
   const [kpis, setKpis] = useState({ totalCollected: 0, pending: 0, overdue: 0, monthlyRevenue: 0 });
   const [selectedPayment, setSelectedPayment] = useState<PaymentWithProject | null>(null);
-  const [showAddModal, setShowAddModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
   const [kpisLoading, setKpisLoading] = useState(true);
 
   const { currentPage, totalPages, goToPage } = usePagination(totalCount, PAGE_SIZE);
@@ -115,97 +109,6 @@ const StaffFinance = () => {
 
   const handlePageChange = (n: number) => {
     goToPage(n);
-  };
-
-  const sendInvoiceNotifications = async (
-    payment: PaymentWithProject,
-    recipient: { id: string; full_name: string | null },
-    clientEmail: string
-  ) => {
-    const supabase = SupabaseService.getInstance().client;
-    // In-app notification to recipient
-    await supabase.from('notifications').insert({
-      user_id: recipient.id,
-      type: 'invoice_sent',
-      title: 'New invoice received',
-      body: `You have a new invoice for ${formatCurrency(payment.amount)}${payment.projects?.title ? ` on project "${payment.projects.title}"` : ''}.`,
-      read: false,
-    });
-    // In-app notification to sender (confirmation)
-    const { data: { user } } = await supabase.auth.getUser();
-    if (user) {
-      await supabase.from('notifications').insert({
-        user_id: user.id,
-        type: 'invoice_sent',
-        title: 'Invoice sent',
-        body: `Invoice of ${formatCurrency(payment.amount)} sent to ${recipient.full_name ?? 'client'}.`,
-        read: false,
-      });
-    }
-    // Email (fire-and-forget)
-    if (payment.project_id) {
-      try {
-        const { Authorization } = await SupabaseService.getInstance().getAuthHeader();
-        await fetch(`/api/email/${payment.project_id}/send`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', Authorization },
-          body: JSON.stringify({
-            to: clientEmail,
-            templateName: 'invoice',
-            variables: {
-              amount: formatCurrency(payment.amount),
-              project: payment.projects?.title ?? '',
-              invoice_number: payment.invoice_number ?? '',
-              due_date: payment.due_date ?? '',
-            },
-          }),
-        });
-      } catch { /* ignore — email is best-effort */ }
-    }
-  };
-
-  const handleCreate = async (data: {
-    invoice_number: string;
-    description: string;
-    amount: number;
-    status: Payment['status'];
-    due_date: string;
-    project_id: string | null;
-    clientEmail: string;
-  }) => {
-    setIsSubmitting(true);
-    const supabase = SupabaseService.getInstance().client;
-    const { data: recipientProfile } = await supabase
-      .from('profiles')
-      .select('id, full_name')
-      .eq('email', data.clientEmail)
-      .maybeSingle();
-
-    if (!recipientProfile) {
-      toast.error("This client hasn't registered in Nebu yet. Contact the client.");
-      setIsSubmitting(false);
-      return;
-    }
-
-    const created = await createPayment({
-      invoice_number: data.invoice_number,
-      description: data.description,
-      amount: data.amount,
-      status: data.status,
-      due_date: data.due_date,
-      project_id: data.project_id,
-      recipient_profile_id: recipientProfile.id,
-    });
-    if (created) {
-      setShowAddModal(false);
-      await refreshKpis();
-      toast.success('Pago creado');
-      loadPayments(currentPage, searchQuery);
-      await sendInvoiceNotifications(created, recipientProfile, data.clientEmail);
-    } else {
-      toast.error('Error al crear pago');
-    }
-    setIsSubmitting(false);
   };
 
   const handleUpdate = async (
@@ -255,10 +158,6 @@ const StaffFinance = () => {
           <h1 className="text-2xl font-semibold text-foreground">{labels.title[lang]}</h1>
           <p className="text-sm text-muted-foreground mt-0.5">{labels.subtitle[lang]}</p>
         </div>
-        <Button onClick={() => setShowAddModal(true)} className="gap-2 shrink-0">
-          <Receipt className="w-4 h-4" />
-          {labels.addPayment[lang]}
-        </Button>
       </div>
 
       {/* KPI Cards */}
@@ -390,24 +289,6 @@ const StaffFinance = () => {
       </div>
 
       <Pagination currentPage={currentPage} totalPages={totalPages} onPageChange={handlePageChange} />
-
-      {/* Add payment modal */}
-      {showAddModal && (
-        <div className="fixed inset-0 bg-black/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-md p-6">
-            <h2 className="text-base font-semibold text-foreground mb-4">
-              {labels.addPayment[lang]}
-            </h2>
-            <PaymentForm
-              projects={projects}
-              onSubmit={handleCreate}
-              onCancel={() => setShowAddModal(false)}
-              isLoading={isSubmitting}
-              lang={lang}
-            />
-          </div>
-        </div>
-      )}
 
       {/* Detail panel */}
       <PaymentDetailPanel
