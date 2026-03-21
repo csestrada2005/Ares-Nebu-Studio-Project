@@ -20,7 +20,7 @@ serve(async (req) => {
     }
 
     const appId = Deno.env.get('META_APP_ID')!;
-    const baseUrl = Deno.env.get('BASE_URL')!;
+    const baseUrl = Deno.env.get('SUPABASE_URL')!;
     const redirectUri = `${baseUrl}/functions/v1/meta-oauth-callback`;
 
     // Encode user_id in state for callback verification

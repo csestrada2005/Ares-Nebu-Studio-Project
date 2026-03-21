@@ -7,8 +7,8 @@ serve(async (req) => {
   const stateParam = url.searchParams.get('state');
   const errorParam = url.searchParams.get('error');
 
-  const supabaseUrl = Deno.env.get('BASE_URL')!;
-  const serviceRoleKey = Deno.env.get('BASE_SERVICE_ROLE_KEY')!;
+  const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+  const serviceRoleKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
   const appId = Deno.env.get('META_APP_ID')!;
   const appSecret = Deno.env.get('META_APP_SECRET')!;
   const redirectUri = `${supabaseUrl}/functions/v1/meta-oauth-callback`;
