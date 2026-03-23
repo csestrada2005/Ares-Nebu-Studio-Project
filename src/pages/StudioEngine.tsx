@@ -28,7 +28,6 @@ import { fileSystemTreeToMap, mapToFileSystemTree } from '../utils/context';
 import JSZip from 'jszip';
 import {
   Download,
-  Upload,
   Loader2,
   Settings,
   Activity,
@@ -37,6 +36,10 @@ import {
   Eye,
   Share2,
   ChevronLeft,
+  Flame,
+  Clock,
+  UserPlus,
+  X as XIcon,
 } from 'lucide-react';
 import { TEMPLATES } from '../templates';
 import { ProtectedRoute } from '../components/auth/ProtectedRoute';
@@ -87,7 +90,7 @@ export function StudioEngine() {
   // -------------------------------------------------------------------------
   const [showSettings, setShowSettings] = useState(false);
   const [showGraph, setShowGraph] = useState(false);
-  const [showHamburger, setShowHamburger] = useState(false);
+  const [isMenuPanelOpen, setIsMenuPanelOpen] = useState(false);
   const [selectedElement, setSelectedElement] = useState<TargetElement | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [editMode, setEditMode] = useState<'interaction' | 'visual'>('interaction');
@@ -696,84 +699,91 @@ export function StudioEngine() {
           <Panel defaultSize={100} minSize={30}>
             <div className="relative w-full h-full bg-background">
 
-              {/* Hamburger menu — top left */}
+              {/* Menu button — top left */}
               <div className="absolute top-4 left-4 z-50">
                 <button
-                  onClick={() => setShowHamburger(v => !v)}
+                  onClick={() => setIsMenuPanelOpen(true)}
                   className="p-2 bg-background/90 hover:bg-accent border border-border rounded-lg shadow-lg text-muted-foreground hover:text-foreground transition-colors"
                   title="Menu"
                 >
                   <Menu size={18} />
                 </button>
+              </div>
 
-                {showHamburger && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-40"
-                      onClick={() => setShowHamburger(false)}
-                    />
-                    <div className="absolute top-10 left-0 z-50 w-52 bg-card border border-border rounded-xl shadow-xl overflow-hidden py-1">
-                      {/* Back to Nebu */}
-                      <button
-                        onClick={() => { setShowHamburger(false); navigate('/'); }}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors rounded-lg"
-                      >
-                        <ChevronLeft size={15} className="text-muted-foreground" />
-                        Back to Nebu
-                      </button>
+              {/* Slide-in left panel */}
+              {isMenuPanelOpen && (
+                <div
+                  className="fixed inset-0 z-50 bg-black/60"
+                  onClick={() => setIsMenuPanelOpen(false)}
+                />
+              )}
+              <div
+                className={`fixed left-0 top-0 h-full w-72 z-[60] bg-card border-r border-border flex flex-col transition-transform duration-300 ${isMenuPanelOpen ? 'translate-x-0' : '-translate-x-full'}`}
+              >
+                {/* Panel header */}
+                <div className="flex items-center justify-between px-5 py-4 border-b border-border shrink-0">
+                  <div className="flex items-center gap-2">
+                    <Flame size={18} className="text-primary" />
+                    <span className="font-semibold text-foreground">Wyrd Forge</span>
+                  </div>
+                  <button
+                    onClick={() => setIsMenuPanelOpen(false)}
+                    className="p-1.5 rounded-lg text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
+                  >
+                    <XIcon size={16} />
+                  </button>
+                </div>
 
-                      <div className="my-1 h-px bg-border" />
+                {/* Navigation items */}
+                <div className="flex flex-col py-2">
+                  <button
+                    onClick={() => { setIsMenuPanelOpen(false); navigate('/'); }}
+                    className="w-full flex items-center gap-3 px-5 py-3 text-sm text-foreground hover:bg-primary/10 hover:text-primary transition-colors"
+                  >
+                    <ChevronLeft size={16} />
+                    Back to Nebu
+                  </button>
+                  <button
+                    onClick={() => { setIsMenuPanelOpen(false); setIsHistoryOpen(true); }}
+                    className="w-full flex items-center gap-3 px-5 py-3 text-sm text-foreground hover:bg-primary/10 hover:text-primary transition-colors"
+                  >
+                    <Clock size={16} />
+                    Version History
+                  </button>
+                </div>
 
-                      {/* Upload Zip — coming soon */}
-                      <button
-                        disabled
-                        title="Coming soon"
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-muted-foreground opacity-50 cursor-not-allowed"
-                      >
-                        <Upload size={15} className="text-muted-foreground" />
-                        Upload Zip
-                      </button>
+                <div className="h-px bg-border mx-5" />
 
-                      {/* Export Zip */}
-                      <button
-                        onClick={() => { setShowHamburger(false); downloadProject(); }}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                      >
-                        <Download size={15} className="text-muted-foreground" />
-                        Export Zip
-                      </button>
-
-                      {/* Visual Graph */}
-                      <button
-                        onClick={() => { setShowHamburger(false); setShowGraph(true); }}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                      >
-                        <Activity size={15} className="text-muted-foreground" />
-                        Visual Graph
-                      </button>
-
-                      <div className="my-1 h-px bg-border" />
-
-                      {/* Share (public link toggle) */}
-                      <button
-                        onClick={() => { setShowHamburger(false); togglePublicAccess(); }}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                      >
-                        <Share2 size={15} className="text-muted-foreground" />
-                        {isPublic ? 'Unshare' : 'Share'}
-                      </button>
-
-                      {/* Share with collaborators */}
-                      <button
-                        onClick={() => { setShowHamburger(false); setShowShareModal(true); }}
-                        className="w-full flex items-center gap-3 px-4 py-2.5 text-sm text-muted-foreground hover:text-foreground hover:bg-accent transition-colors"
-                      >
-                        <Share2 size={15} className="text-muted-foreground" />
-                        Invite Collaborators
-                      </button>
-                    </div>
-                  </>
-                )}
+                <div className="flex flex-col py-2">
+                  <button
+                    onClick={() => { setIsMenuPanelOpen(false); downloadProject(); }}
+                    className="w-full flex items-center gap-3 px-5 py-3 text-sm text-foreground hover:bg-primary/10 hover:text-primary transition-colors"
+                  >
+                    <Download size={16} />
+                    Export Zip
+                  </button>
+                  <button
+                    onClick={() => { setIsMenuPanelOpen(false); setShowGraph(true); }}
+                    className="w-full flex items-center gap-3 px-5 py-3 text-sm text-foreground hover:bg-primary/10 hover:text-primary transition-colors"
+                  >
+                    <Activity size={16} />
+                    Visual Graph
+                  </button>
+                  <button
+                    onClick={() => { setIsMenuPanelOpen(false); togglePublicAccess(); }}
+                    className="w-full flex items-center gap-3 px-5 py-3 text-sm text-foreground hover:bg-primary/10 hover:text-primary transition-colors"
+                  >
+                    <Share2 size={16} />
+                    {isPublic ? 'Unshare' : 'Share'}
+                  </button>
+                  <button
+                    onClick={() => { setIsMenuPanelOpen(false); setShowShareModal(true); }}
+                    className="w-full flex items-center gap-3 px-5 py-3 text-sm text-foreground hover:bg-primary/10 hover:text-primary transition-colors"
+                  >
+                    <UserPlus size={16} />
+                    Invite Collaborators
+                  </button>
+                </div>
               </div>
 
               {/* Read-only badge */}
@@ -904,7 +914,6 @@ export function StudioEngine() {
         {!isReadOnly && (
           <CommandBubble
             onClick={() => setIsCommandModalOpen(true)}
-            onHistoryClick={() => setIsHistoryOpen(true)}
           />
         )}
 

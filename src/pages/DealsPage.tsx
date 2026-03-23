@@ -1,6 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { toast } from 'sonner';
-import { Plus, TrendingUp, Send, Edit2, History, ExternalLink } from 'lucide-react';
+import { Plus, TrendingUp, Send, Edit2, History, ExternalLink, X } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -11,6 +11,9 @@ import Pagination from '@/components/Pagination';
 import { SupabaseService } from '@/services/SupabaseService';
 import { useNavigate } from 'react-router-dom';
 import type { Deal } from '@/types';
+
+type ClientProfile = { id: string; full_name: string | null; email: string | null };
+type CollaboratorEntry = { id: string; full_name: string | null; email: string | null; role: 'read' | 'edit' };
 
 type DealWithContact = Deal & { contacts: { name: string } | null };
 
@@ -141,7 +144,6 @@ const DealsPage = () => {
   const [deals, setDeals] = useState<DealWithContact[]>([]);
   const [totalCount, setTotalCount] = useState(0);
   const [contacts, setContacts] = useState<{ id: string; name: string }[]>([]);
-  const [clientProfiles, setClientProfiles] = useState<{ id: string; full_name: string | null; email: string | null }[]>([]);
   const [search, setSearch] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -158,10 +160,23 @@ const DealsPage = () => {
   const [formProb, setFormProb] = useState('50');
   const [formClose, setFormClose] = useState('');
   const [formContactId, setFormContactId] = useState('');
-  const [formClientId, setFormClientId] = useState('');
   const [formScope, setFormScope] = useState('');
   const [formTimeline, setFormTimeline] = useState('');
   const [formNote, setFormNote] = useState('');
+
+  // Client email search state
+  const [clientEmailInput, setClientEmailInput] = useState('');
+  const [clientSearchResults, setClientSearchResults] = useState<ClientProfile[]>([]);
+  const [clientSearchLoading, setClientSearchLoading] = useState(false);
+  const [selectedClient, setSelectedClient] = useState<ClientProfile | null>(null);
+  const clientDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+
+  // Collaborators state
+  const [collabEmailInput, setCollabEmailInput] = useState('');
+  const [collabSearchResults, setCollabSearchResults] = useState<ClientProfile[]>([]);
+  const [collabSearchLoading, setCollabSearchLoading] = useState(false);
+  const [pendingCollaborators, setPendingCollaborators] = useState<CollaboratorEntry[]>([]);
+  const collabDebounceRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
 
   const { currentPage, totalPages, goToPage } = usePagination(totalCount, PAGE_SIZE);
 
@@ -173,27 +188,73 @@ const DealsPage = () => {
     setIsLoading(false);
   };
 
+  const searchProfiles = useCallback(async (input: string): Promise<ClientProfile[]> => {
+    if (!input.trim() || input.trim().length < 2) return [];
+    const supabase = SupabaseService.getInstance().client;
+    const { data } = await supabase
+      .from('profiles')
+      .select('id, full_name, email')
+      .or(`email.ilike.%${input}%,full_name.ilike.%${input}%`)
+      .limit(5);
+    return (data ?? []) as ClientProfile[];
+  }, []);
+
+  // Debounced client search
+  useEffect(() => {
+    clearTimeout(clientDebounceRef.current);
+    if (!clientEmailInput.trim()) { setClientSearchResults([]); return; }
+    clientDebounceRef.current = setTimeout(async () => {
+      setClientSearchLoading(true);
+      const results = await searchProfiles(clientEmailInput);
+      setClientSearchResults(results);
+      setClientSearchLoading(false);
+    }, 300);
+    return () => clearTimeout(clientDebounceRef.current);
+  }, [clientEmailInput, searchProfiles]);
+
+  // Debounced collaborator search
+  useEffect(() => {
+    clearTimeout(collabDebounceRef.current);
+    if (!collabEmailInput.trim()) { setCollabSearchResults([]); return; }
+    collabDebounceRef.current = setTimeout(async () => {
+      setCollabSearchLoading(true);
+      const results = await searchProfiles(collabEmailInput);
+      setCollabSearchResults(results);
+      setCollabSearchLoading(false);
+    }, 300);
+    return () => clearTimeout(collabDebounceRef.current);
+  }, [collabEmailInput, searchProfiles]);
+
   useEffect(() => {
     getContactsForDropdown().then(setContacts);
-    // Fetch client profiles
-    const supabase = SupabaseService.getInstance().client;
-    supabase.from('profiles').select('id, full_name, email').eq('role', 'cliente').then(({ data }) => {
-      setClientProfiles(data ?? []);
-    });
   }, []);
 
   useEffect(() => { goToPage(1); load(1, search); }, [search]);
   useEffect(() => { load(currentPage, search); }, [currentPage]);
 
+  const resetClientSearch = () => {
+    setClientEmailInput('');
+    setClientSearchResults([]);
+    setSelectedClient(null);
+  };
+
+  const resetCollabSearch = () => {
+    setCollabEmailInput('');
+    setCollabSearchResults([]);
+    setPendingCollaborators([]);
+  };
+
   const openCreate = () => {
     setEditingDeal(null);
     setFormTitle(''); setFormValue(''); setFormStage('prospecting');
     setFormProb('50'); setFormClose(''); setFormContactId('');
-    setFormClientId(''); setFormScope(''); setFormTimeline(''); setFormNote('');
+    setFormScope(''); setFormTimeline(''); setFormNote('');
+    resetClientSearch();
+    resetCollabSearch();
     setShowModal(true);
   };
 
-  const openEdit = (deal: DealWithContact, withNote = false) => {
+  const openEdit = async (deal: DealWithContact, withNote = false) => {
     setEditingDeal(deal);
     setFormTitle(deal.title);
     setFormValue(String(deal.value));
@@ -201,11 +262,27 @@ const DealsPage = () => {
     setFormProb(String(deal.probability));
     setFormClose(deal.expected_close ?? '');
     setFormContactId(deal.contact_id ?? '');
-    setFormClientId(deal.client_profile_id ?? '');
     setFormScope(deal.scope_description ?? '');
     setFormTimeline(deal.timeline ?? '');
     setFormNote('');
     setReviseNote(withNote ? '' : '');
+    resetCollabSearch();
+
+    // Pre-populate selectedClient from deal's client_profile_id
+    if (deal.client_profile_id) {
+      setClientEmailInput('');
+      setClientSearchResults([]);
+      const supabase = SupabaseService.getInstance().client;
+      const { data } = await supabase
+        .from('profiles')
+        .select('id, full_name, email')
+        .eq('id', deal.client_profile_id)
+        .single();
+      setSelectedClient(data ? (data as ClientProfile) : null);
+    } else {
+      resetClientSearch();
+    }
+
     setShowModal(true);
   };
 
@@ -219,7 +296,7 @@ const DealsPage = () => {
       probability: parseInt(formProb, 10),
       expected_close: formClose || null,
       contact_id: formContactId || null,
-      client_profile_id: formClientId || null,
+      client_profile_id: selectedClient?.id || null,
       scope_description: formScope || null,
       timeline: formTimeline || null,
     };
@@ -249,14 +326,42 @@ const DealsPage = () => {
         if (updated) {
           setDeals(prev => prev.map(d => d.id === editingDeal.id ? { ...d, ...updated } : d));
           toast.success(lang === 'es' ? 'Deal actualizado' : 'Deal updated');
+          // Insert collaborators if deal has a forge_project_id
+          if (pendingCollaborators.length > 0 && editingDeal.forge_project_id) {
+            const supabase = SupabaseService.getInstance().client;
+            await Promise.all(pendingCollaborators.map(c =>
+              supabase.from('forge_project_collaborators').upsert({
+                project_id: editingDeal.forge_project_id,
+                user_id: c.id,
+                role: c.role,
+                status: 'pending',
+              })
+            ));
+          }
         } else {
           toast.error(lang === 'es' ? 'Error al actualizar' : 'Update failed');
         }
       }
     } else {
       const created = await createDeal(payload);
-      if (created) { toast.success(lang === 'es' ? 'Deal creado' : 'Deal created'); load(currentPage, search); }
-      else toast.error(lang === 'es' ? 'Error al crear' : 'Create failed');
+      if (created) {
+        toast.success(lang === 'es' ? 'Deal creado' : 'Deal created');
+        // Insert collaborators if deal has a forge_project_id
+        if (pendingCollaborators.length > 0 && created.forge_project_id) {
+          const supabase = SupabaseService.getInstance().client;
+          await Promise.all(pendingCollaborators.map(c =>
+            supabase.from('forge_project_collaborators').upsert({
+              project_id: created.forge_project_id,
+              user_id: c.id,
+              role: c.role,
+              status: 'pending',
+            })
+          ));
+        }
+        load(currentPage, search);
+      } else {
+        toast.error(lang === 'es' ? 'Error al crear' : 'Create failed');
+      }
     }
     setShowModal(false);
     setIsSubmitting(false);
@@ -473,11 +578,99 @@ const DealsPage = () => {
 
             <div className="space-y-1">
               <label className="text-sm font-medium text-foreground">{lang === 'es' ? 'Asignar Cliente' : 'Assign Client'}</label>
-              <select value={formClientId} onChange={e => setFormClientId(e.target.value)} disabled={isSubmitting}
-                className="w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary disabled:opacity-50">
-                <option value="">{lang === 'es' ? 'Sin cliente' : 'No client'}</option>
-                {clientProfiles.map(c => <option key={c.id} value={c.id}>{c.full_name ?? c.email ?? c.id}</option>)}
-              </select>
+              {selectedClient ? (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="inline-flex items-center gap-1.5 bg-primary/10 border border-primary/30 text-primary text-xs px-3 py-1.5 rounded-full">
+                    {selectedClient.full_name ?? selectedClient.email ?? selectedClient.id}
+                    <button onClick={() => setSelectedClient(null)} className="hover:text-red-400 transition-colors" type="button">
+                      <X size={12} />
+                    </button>
+                  </span>
+                </div>
+              ) : (
+                <div className="relative">
+                  <Input
+                    value={clientEmailInput}
+                    onChange={e => setClientEmailInput(e.target.value)}
+                    disabled={isSubmitting}
+                    placeholder={lang === 'es' ? 'Buscar por email o nombre...' : 'Search by email or name...'}
+                  />
+                  {clientSearchLoading && (
+                    <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">...</span>
+                  )}
+                  {clientSearchResults.length > 0 && (
+                    <div className="absolute z-10 mt-1 w-full bg-card border border-border rounded-md shadow-lg overflow-hidden">
+                      {clientSearchResults.map(r => (
+                        <button
+                          key={r.id}
+                          type="button"
+                          onClick={() => { setSelectedClient(r); setClientEmailInput(''); setClientSearchResults([]); }}
+                          className="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors"
+                        >
+                          <span className="font-medium text-foreground">{r.full_name ?? '—'}</span>
+                          <span className="text-muted-foreground ml-2 text-xs">{r.email}</span>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <div className="space-y-1">
+              <label className="text-sm font-medium text-foreground">{lang === 'es' ? 'Colaboradores' : 'Collaborators'}</label>
+              {pendingCollaborators.length > 0 && (
+                <div className="flex flex-wrap gap-2 mb-2">
+                  {pendingCollaborators.map(c => (
+                    <span key={c.id} className="inline-flex items-center gap-1.5 bg-accent border border-border text-foreground text-xs px-3 py-1.5 rounded-full">
+                      {c.full_name ?? c.email ?? c.id}
+                      <select
+                        value={c.role}
+                        onChange={e => setPendingCollaborators(prev => prev.map(p => p.id === c.id ? { ...p, role: e.target.value as 'read' | 'edit' } : p))}
+                        className="bg-transparent text-xs focus:outline-none ml-1"
+                      >
+                        <option value="read">read</option>
+                        <option value="edit">edit</option>
+                      </select>
+                      <button onClick={() => setPendingCollaborators(prev => prev.filter(p => p.id !== c.id))} type="button" className="hover:text-red-400 transition-colors">
+                        <X size={12} />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="relative">
+                <Input
+                  value={collabEmailInput}
+                  onChange={e => setCollabEmailInput(e.target.value)}
+                  disabled={isSubmitting}
+                  placeholder={lang === 'es' ? 'Añadir colaborador por email...' : 'Add collaborator by email...'}
+                />
+                {collabSearchLoading && (
+                  <span className="absolute right-3 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">...</span>
+                )}
+                {collabSearchResults.length > 0 && (
+                  <div className="absolute z-10 mt-1 w-full bg-card border border-border rounded-md shadow-lg overflow-hidden">
+                    {collabSearchResults.map(r => (
+                      <button
+                        key={r.id}
+                        type="button"
+                        onClick={() => {
+                          if (!pendingCollaborators.some(c => c.id === r.id)) {
+                            setPendingCollaborators(prev => [...prev, { ...r, role: 'read' }]);
+                          }
+                          setCollabEmailInput('');
+                          setCollabSearchResults([]);
+                        }}
+                        className="w-full text-left px-3 py-2 text-sm hover:bg-accent transition-colors"
+                      >
+                        <span className="font-medium text-foreground">{r.full_name ?? '—'}</span>
+                        <span className="text-muted-foreground ml-2 text-xs">{r.email}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
 
             <div className="grid grid-cols-2 gap-3">
