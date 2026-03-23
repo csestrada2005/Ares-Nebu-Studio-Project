@@ -32,6 +32,10 @@ export async function compile(files: Map<string, string>): Promise<string> {
       body: JSON.stringify({ files: Object.fromEntries(files) }),
     });
 
+    if (response.status === 401) {
+      return generateErrorHTML('Session expired. Please refresh the page to continue building.');
+    }
+
     if (!response.ok) {
       let msg = 'Compilation failed';
       try {
@@ -43,7 +47,11 @@ export async function compile(files: Map<string, string>): Promise<string> {
 
     const data = await response.json();
     if (data.error) return generateErrorHTML(data.error);
-    return data.html;
+    const html = data.html as string;
+    if (html && html.includes('Invalid or expired session')) {
+      return generateErrorHTML('Session expired. Please refresh the page to continue building.');
+    }
+    return html;
   } catch (err: any) {
     // Network error — show client-side error page
     return generateErrorHTML(err?.message || String(err));

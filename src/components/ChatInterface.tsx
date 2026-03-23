@@ -129,7 +129,9 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
   const [messages, setMessages] = useState<Message[]>([
     { role: 'assistant', content: 'Hello! How can I help you today?' }
   ]);
-  const [input, setInput] = useState('');
+  const [input, setInput] = useState(() => {
+    try { return sessionStorage.getItem('forge_chat_input') ?? ''; } catch { return ''; }
+  });
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const [progressLines, setProgressLines] = useState<{
@@ -177,6 +179,7 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
 
     const userMessage = input.trim();
     setInput('');
+    try { sessionStorage.removeItem('forge_chat_input'); } catch { /* ignore */ }
     setMessages(prev => [...prev, { role: 'user', content: userMessage }]);
 
     startTimeRef.current = Date.now();
@@ -328,44 +331,14 @@ export function ChatInterface({ isLoading, onSendMessage, selectedElement }: Cha
             </span>
           </div>
         )}
-        {input === '' && (
-          <div className="mb-3 flex flex-wrap gap-2">
-            {[
-              '✨ Build a Pipeline View for Leads',
-              '✨ Create a Paid Payments Bar Chart',
-              '✨ Build an Active Projects Dashboard',
-            ].map((suggestion) => (
-              <button
-                key={suggestion}
-                disabled={isLoading}
-                onClick={() => {
-                  if (isLoading) return;
-                  setInput(suggestion);
-                  setTimeout(() => {
-                    const trimmed = suggestion.trim();
-                    setInput('');
-                    setMessages(prev => [...prev, { role: 'user', content: trimmed }]);
-                    onSendMessage(trimmed).then((result) => {
-                      const { content, warning, errorType, errorDetail } = buildAssistantMessage(result);
-                      setMessages(prev => [
-                        ...prev,
-                        { role: 'assistant', content, warning, errorType, errorDetail },
-                      ]);
-                    });
-                  }, 0);
-                }}
-                className="px-3 py-1.5 bg-accent hover:bg-accent/80 border border-border hover:border-primary/50 text-muted-foreground hover:text-foreground rounded-full text-xs transition-colors truncate max-w-full disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                {suggestion}
-              </button>
-            ))}
-          </div>
-        )}
         <div className="flex gap-2">
           <input
             type="text"
             value={input}
-            onChange={(e) => setInput(e.target.value)}
+            onChange={(e) => {
+              setInput(e.target.value);
+              try { sessionStorage.setItem('forge_chat_input', e.target.value); } catch { /* ignore */ }
+            }}
             onKeyDown={handleKeyDown}
             placeholder="Type a message..."
             className="flex-1 bg-accent text-foreground border border-border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary placeholder:text-muted-foreground disabled:opacity-50 disabled:cursor-not-allowed"

@@ -130,8 +130,15 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       try {
         // getSession espera de forma segura a que se refresque el token si es necesario
         // lo que evita el falso negativo (redirección a /login) en la nueva pestaña.
-        const { data: { session }, error } = await supabase.auth.getSession();
+        let { data: { session }, error } = await supabase.auth.getSession();
         if (error) throw error;
+
+        // Retry once after 2 seconds if session comes back null (race condition on tab focus)
+        if (!session) {
+          await new Promise((resolve) => setTimeout(resolve, 2000));
+          const retry = await supabase.auth.getSession();
+          if (!retry.error) session = retry.data.session;
+        }
 
         if (session?.user) {
           const p = await fetchProfile(session.user.id);
@@ -166,10 +173,39 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
 
     initAuth();
 
+    // Visibility change listener: refresh session silently when tab regains focus
+    const handleVisibilityChange = async () => {
+      if (document.visibilityState !== 'visible') return;
+      try {
+        const { data: { session } } = await supabase.auth.getSession();
+        if (!mountedRef.current) return;
+        if (session?.user) {
+          setUser(session.user);
+          const p = await fetchProfile(session.user.id);
+          if (!mountedRef.current) return;
+          if (p) {
+            if (p.role) writeProfileCache(p);
+            setProfile(p);
+          }
+        }
+      } catch (err) {
+        console.error('[AuthContext] visibility refresh error:', err);
+      }
+    };
+
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+
     const { data: listener } = supabase.auth.onAuthStateChange(
       async (event, session) => {
         // Ignoramos INITIAL_SESSION porque ya lo manejamos robustamente en initAuth
         if (event === "INITIAL_SESSION") return;
+        // TOKEN_REFRESHED should NOT set loading to true — update state silently
+        if (event === "TOKEN_REFRESHED") {
+          if (session?.user && mountedRef.current) {
+            setUser(session.user);
+          }
+          return;
+        }
 
         try {
           const currentUser = session?.user ?? null;
@@ -206,6 +242,7 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
       mountedRef.current = false;
       clearTimeout(safetyTimer);
       listener.subscription.unsubscribe();
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
     };
   }, []);
 

@@ -4,6 +4,7 @@
  */
 
 import { SupabaseService } from './SupabaseService';
+import { toast } from 'sonner';
 
 class PlatformService {
   private async getHeaders(): Promise<HeadersInit> {
@@ -14,54 +15,103 @@ class PlatformService {
     };
   }
 
+  private handleAuthError(response: Response): void {
+    if (response.status === 401) {
+      toast.error('Session expired — please refresh the page.');
+    }
+  }
+
   /** Proxy a chat request to /api/chat (Anthropic). */
   async callChat(body: object): Promise<Response> {
-    const baseHeaders = await this.getHeaders();
-    return fetch('/api/chat', {
-      method: 'POST',
-      headers: { ...baseHeaders, 'anthropic-version': '2023-06-01' },
-      body: JSON.stringify(body),
-    });
+    try {
+      const baseHeaders = await this.getHeaders();
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { ...baseHeaders, 'anthropic-version': '2023-06-01' },
+        body: JSON.stringify(body),
+      });
+      this.handleAuthError(response);
+      return response;
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('Session expired')) {
+        toast.error(err.message);
+      }
+      throw err;
+    }
   }
 
   /** Check which platform services are configured server-side. */
   async checkPlatformServices(): Promise<Record<string, boolean>> {
-    const headers = await this.getHeaders();
-    const response = await fetch('/api/platform-check', {
-      method: 'POST',
-      headers,
-    });
-    if (!response.ok) return {};
-    return response.json();
+    try {
+      const headers = await this.getHeaders();
+      const response = await fetch('/api/platform-check', {
+        method: 'POST',
+        headers,
+      });
+      this.handleAuthError(response);
+      if (!response.ok) return {};
+      return response.json();
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('Session expired')) {
+        toast.error(err.message);
+      }
+      return {};
+    }
   }
 
   /** Compile project files server-side. */
   async compileSrc(files: Record<string, string>): Promise<{ html?: string; error?: string }> {
-    const headers = await this.getHeaders();
-    const response = await fetch('/api/compile', {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ files }),
-    });
-    return response.json();
+    try {
+      const headers = await this.getHeaders();
+      const response = await fetch('/api/compile', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ files }),
+      });
+      this.handleAuthError(response);
+      return response.json();
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('Session expired')) {
+        toast.error(err.message);
+        return { error: err.message };
+      }
+      throw err;
+    }
   }
 
   /** Trigger a managed Vercel deployment for the given project. */
   async deployProject(projectId: string, files: Record<string, string>, projectName: string): Promise<{ url?: string; deploymentId?: string; error?: string }> {
-    const headers = await this.getHeaders();
-    const response = await fetch(`/api/deploy/${projectId}`, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify({ files, projectName }),
-    });
-    return response.json();
+    try {
+      const headers = await this.getHeaders();
+      const response = await fetch(`/api/deploy/${projectId}`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ files, projectName }),
+      });
+      this.handleAuthError(response);
+      return response.json();
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('Session expired')) {
+        toast.error(err.message);
+        return { error: err.message };
+      }
+      throw err;
+    }
   }
 
   /** Get deployment status for a project. */
   async getDeploymentStatus(projectId: string): Promise<{ url: string | null; lastDeployedAt: string | null; status: string }> {
-    const headers = await this.getHeaders();
-    const response = await fetch(`/api/deploy/${projectId}/status`, { headers });
-    return response.json();
+    try {
+      const headers = await this.getHeaders();
+      const response = await fetch(`/api/deploy/${projectId}/status`, { headers });
+      this.handleAuthError(response);
+      return response.json();
+    } catch (err) {
+      if (err instanceof Error && err.message.includes('Session expired')) {
+        toast.error(err.message);
+      }
+      throw err;
+    }
   }
 }
 

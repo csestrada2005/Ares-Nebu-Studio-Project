@@ -24,12 +24,26 @@ export class SupabaseService {
 
   /**
    * Returns the Authorization header with the current session's access token.
-   * Used by PlatformService to authenticate all /api/* requests.
+   * If the session is null or expires within 60 seconds, refreshes it first.
+   * Throws if refresh fails.
    */
   public async getAuthHeader(): Promise<{ Authorization: string }> {
     const { data } = await this.client.auth.getSession();
-    const token = data.session?.access_token ?? '';
-    return { Authorization: `Bearer ${token}` };
+    const session = data.session;
+
+    const expiresAt = session?.expires_at ?? 0;
+    const nowSec = Math.floor(Date.now() / 1000);
+    const isExpiringSoon = !session || (expiresAt - nowSec) < 60;
+
+    if (isExpiringSoon) {
+      const { data: refreshData, error } = await this.client.auth.refreshSession();
+      if (error || !refreshData.session) {
+        throw new Error('Session expired — please refresh the page.');
+      }
+      return { Authorization: `Bearer ${refreshData.session.access_token}` };
+    }
+
+    return { Authorization: `Bearer ${session.access_token}` };
   }
 
   /**
