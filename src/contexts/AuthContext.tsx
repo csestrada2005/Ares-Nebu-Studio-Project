@@ -126,13 +126,56 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
     // sets loading=true again after that point.
     const initAuth = async () => {
       try {
-        const { data: { session }, error } = await supabase.auth.getSession();
-        if (error) throw error;
+        let resolvedUser: User | null = null;
 
-        if (session?.user) {
-          const p = await fetchProfile(session.user.id);
+        // Race getSession against a 2000ms timeout to bypass cross-tab
+        // Gotrue-js lock corruption that can cause an indefinite hang.
+        try {
+          const { data: { session }, error } = await Promise.race([
+            supabase.auth.getSession(),
+            new Promise<never>((_, reject) =>
+              setTimeout(() => reject(new Error('SESSION_TIMEOUT')), 2000)
+            ),
+          ]);
+          if (error) throw error;
+          resolvedUser = session?.user ?? null;
+        } catch (sessionErr) {
+          if (sessionErr instanceof Error && sessionErr.message === 'SESSION_TIMEOUT') {
+            // Gotrue-js lock is corrupted — read the raw token from localStorage
+            // as a fallback so the user is not stranded on an infinite loader.
+            console.warn('[AuthContext] getSession timed out — falling back to localStorage session read');
+            try {
+              for (let i = 0; i < localStorage.length; i++) {
+                const key = localStorage.key(i);
+                if (key && key.startsWith('sb-') && key.endsWith('-auth-token')) {
+                  const raw = localStorage.getItem(key);
+                  if (raw) {
+                    const sessionObj = JSON.parse(raw);
+                    resolvedUser = sessionObj?.user ?? null;
+                  }
+                  break;
+                }
+              }
+            } catch (parseErr) {
+              console.error('[AuthContext] Failed to parse localStorage session:', parseErr);
+            }
+          } else {
+            throw sessionErr;
+          }
+        }
+
+        if (resolvedUser) {
+          // Set user immediately so the UI is not blocked on profile fetch.
+          setUser(resolvedUser);
+
+          // Race fetchProfile against a 3000ms timeout to prevent database
+          // cold-start hangs from blocking the UI indefinitely.
+          const p = await Promise.race([
+            fetchProfile(resolvedUser.id),
+            new Promise<null>((resolve) => setTimeout(() => resolve(null), 3000)),
+          ]);
+
           if (!mountedRef.current) return;
-          setUser(session.user);
 
           if (p) {
             setProfile(p);
@@ -146,13 +189,12 @@ export const AuthProvider = ({ children }: { children: ReactNode }) => {
             }
           }
 
-          updateLastSeen(session.user.id).catch(console.error);
+          updateLastSeen(resolvedUser.id).catch(console.error);
         }
       } catch (err) {
         console.error("Error al obtener la sesión inicial:", err);
-        // If the local session is corrupted, sign out cleanly to avoid an
-        // infinite loading loop and return the user to the login page.
-        await supabase.auth.signOut().catch(console.error);
+        // Let it fail gracefully — do NOT force signOut on transient errors,
+        // as that would wipe valid storage on temporary network failures.
       } finally {
         // loading is set to false exactly once — here — and never toggled again.
         if (mountedRef.current) setLoading(false);
