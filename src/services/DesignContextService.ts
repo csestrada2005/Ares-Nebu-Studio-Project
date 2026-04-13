@@ -5,52 +5,48 @@ export class DesignContextService {
     try {
       const supabase = SupabaseService.getInstance().client;
 
-      // 1. Products Query: Exact match on product_type (no fallback)
-      const productsRes = await supabase.from('products').select('*').eq('product_type', productType).maybeSingle();
-      const productsRow = !productsRes.error ? productsRes.data : null;
-
-      // 2. Colors Query: Exact match, then fallback to SaaS, then limit(1)
-      let colorsRes = await supabase.from('colors').select('*').eq('product_type', productType).maybeSingle();
-      if (!colorsRes.data && !colorsRes.error) {
-        colorsRes = await supabase.from('colors').select('*').eq('product_type', 'SaaS (General)').maybeSingle();
-        if (!colorsRes.data && !colorsRes.error) {
-          colorsRes = await supabase.from('colors').select('*').limit(1).maybeSingle();
-        }
-      }
-      const colorsRow = !colorsRes.error ? colorsRes.data : null;
-
-      // 3. UI Reasoning Query: Match on ui_category, then fallback limit(1)
-      let uiRes = await supabase.from('ui_reasoning').select('*').eq('ui_category', productType).maybeSingle();
-      if (!uiRes.data && !uiRes.error) {
-        uiRes = await supabase.from('ui_reasoning').select('*').limit(1).maybeSingle();
-      }
-      const uiRow = !uiRes.error ? uiRes.data : null;
-
-      // 4. Styles Query: dynamic SaaS matching, no product_type column in table
-      const isSaaS = /saas|app|software|b2b|cloud/i.test(productType);
-      const styleMatchKeyword = isSaaS ? '%SaaS%' : `%${productType.split(' ')[0]}%`;
-      let stylesRes = await supabase.from('styles').select('*').ilike('best_for', styleMatchKeyword).maybeSingle();
-      if (!stylesRes.data && !stylesRes.error) {
-         stylesRes = await supabase.from('styles').select('*').limit(1).maybeSingle();
-      }
-      const stylesRow = !stylesRes.error ? stylesRes.data : null;
-      const stylesGate = !!stylesRow;
-
-      // 5. Typography Query: match best_for using ilike
       let hasTypographyMatch = false;
-      let typographyRes = await supabase.from('typography').select('*').ilike('best_for', `%${productType}%`).maybeSingle();
 
-      if (typographyRes.data && !typographyRes.error) {
-        hasTypographyMatch = true;
-      } else if (!typographyRes.error) {
-        // Fallback 1: Modern SaaS
-        typographyRes = await supabase.from('typography').select('*').ilike('font_pairing_name', '%Modern SaaS%').maybeSingle();
-        if (!typographyRes.data && !typographyRes.error) {
-          // Final fallback
-          typographyRes = await supabase.from('typography').select('*').limit(1).maybeSingle();
-        }
-      }
-      const typographyRow = !typographyRes.error ? typographyRes.data : null;
+      const [productsRes, colorsRes, uiRes, stylesRes, typographyRes] = await Promise.allSettled([
+        supabase.from('products').select('*').eq('product_type', productType).maybeSingle(),
+        (async () => {
+          let res = await supabase.from('colors').select('*').eq('product_type', productType).maybeSingle();
+          if (!res.data && !res.error) res = await supabase.from('colors').select('*').eq('product_type', 'SaaS (General)').maybeSingle();
+          if (!res.data && !res.error) res = await supabase.from('colors').select('*').limit(1).maybeSingle();
+          return res;
+        })(),
+        (async () => {
+          let res = await supabase.from('ui_reasoning').select('*').eq('ui_category', productType).maybeSingle();
+          if (!res.data && !res.error) res = await supabase.from('ui_reasoning').select('*').limit(1).maybeSingle();
+          return res;
+        })(),
+        (async () => {
+          const isSaaS = /saas|app|software|b2b|cloud/i.test(productType);
+          const styleMatchKeyword = isSaaS ? '%SaaS%' : `%${productType.split(' ')[0]}%`;
+          let res = await supabase.from('styles').select('*').ilike('best_for', styleMatchKeyword).maybeSingle();
+          if (!res.data && !res.error) res = await supabase.from('styles').select('*').limit(1).maybeSingle();
+          return res;
+        })(),
+        (async () => {
+          const res = await supabase.from('typography').select('*').ilike('best_for', `%${productType}%`).maybeSingle();
+          if (res.data && !res.error) {
+            hasTypographyMatch = true;
+            return res;
+          }
+          const fb1 = await supabase.from('typography').select('*').ilike('font_pairing_name', '%Modern SaaS%').maybeSingle();
+          if (fb1.data && !fb1.error) return fb1;
+          return supabase.from('typography').select('*').limit(1).maybeSingle();
+        })()
+      ]);
+
+      const productsRow = productsRes.status === 'fulfilled' && !productsRes.value.error ? productsRes.value.data : null;
+      const colorsRow = colorsRes.status === 'fulfilled' && !colorsRes.value.error ? colorsRes.value.data : null;
+      const uiRow = uiRes.status === 'fulfilled' && !uiRes.value.error ? uiRes.value.data : null;
+
+      const stylesRow = stylesRes.status === 'fulfilled' && !stylesRes.value.error ? stylesRes.value.data : null;
+      const stylesGate = !!stylesRow && typeof stylesRow.best_for === 'string' && stylesRow.best_for.toLowerCase().includes(productType.toLowerCase());
+
+      const typographyRow = typographyRes.status === 'fulfilled' && !typographyRes.value.error ? typographyRes.value.data : null;
 
       let resultString = `=== DESIGN CONTEXT FOR ${productType} ===\n\n`;
 
@@ -101,9 +97,8 @@ export class DesignContextService {
 
       resultString += `=== END DESIGN CONTEXT ===`;
 
-      // Truncate to 2500 if necessary
       if (resultString.length > 2500) {
-         resultString = resultString.substring(0, 2500);
+        resultString = resultString.substring(0, 2500);
       }
 
       console.log('[DesignContextService] injected sections:', { colors: !!colorsRow, uiReasoning: !!uiRow, styles: stylesGate, typography: hasTypographyMatch, products: !!productsRow });
