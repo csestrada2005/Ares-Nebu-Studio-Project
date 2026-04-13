@@ -134,10 +134,13 @@ function resolveRelativePath(fromFile, importPath, files) {
   const resolved = normalized.join('/');
   if (files[resolved]) return resolved;
   const extensions = ['.tsx', '.ts', '.jsx', '.js'];
+  const candidatesTried = [];
   for (const ext of extensions) {
+    candidatesTried.push(resolved + ext, `${resolved}/index${ext}`);
     if (files[resolved + ext]) return resolved + ext;
     if (files[`${resolved}/index${ext}`]) return `${resolved}/index${ext}`;
   }
+  console.warn('[ServerCompiler] Unresolved import:', { fromFile, importPath, tried: candidatesTried });
   return null;
 }
 

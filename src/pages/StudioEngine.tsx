@@ -125,6 +125,7 @@ export function StudioEngine() {
   const [isPublic, setIsPublic] = useState(false);
   const [showShareModal, setShowShareModal] = useState(false);
   const [currentProjectName, setCurrentProjectName] = useState<string>('');
+  const [isProjectReady, setIsProjectReady] = useState(false);
 
   // -------------------------------------------------------------------------
   // Mount: load project files from Supabase
@@ -196,6 +197,7 @@ export function StudioEngine() {
       }
 
       await loadFromSupabase(projectId);
+      setIsProjectReady(true);
 
       // Fetch is_public status after files are loaded
       const { data: projectRow } = await supabase
@@ -292,6 +294,7 @@ export function StudioEngine() {
   // Phase 4 Fix 4: run initialPrompt only after files have loaded
   // -------------------------------------------------------------------------
   useEffect(() => {
+    if (!isProjectReady) return;
     if (isLoading) return;
     if (!initialPrompt) return;
     if (hasProcessedInitialPrompt.current) return;
@@ -307,17 +310,18 @@ export function StudioEngine() {
         handleSendMessage(initialPrompt);
       });
     }
-  }, [isLoading]);
+  }, [isProjectReady, isLoading]);
 
   // -------------------------------------------------------------------------
   // Auto-load template silently when files are empty (Prompt 4)
   // -------------------------------------------------------------------------
   useEffect(() => {
+    if (!isProjectReady) return;
     if (isLoading) return;
     if (files.size > 0) return;
     if (hasProcessedInitialPrompt.current) return;
     handleLoadTemplate('landing-page');
-  }, [isLoading, files.size]);
+  }, [isProjectReady, isLoading, files.size]);
 
   // -------------------------------------------------------------------------
   // Phase 4 Fix 2: clear stale element selection after AI modifies App.tsx
