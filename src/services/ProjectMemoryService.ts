@@ -179,7 +179,7 @@ export class ProjectMemoryService {
       .from('forge_project_memory')
       .select('*')
       .eq('project_id', projectId)
-      .single();
+      .maybeSingle();
 
     if (error || !data) return null;
 
@@ -210,7 +210,7 @@ export class ProjectMemoryService {
         .from('forge_project_memory')
         .select('component_registry, route_map, tech_stack, updated_at')
         .eq('project_id', projectId)
-        .single();
+        .maybeSingle();
 
       if (error || !data) return null;
 
