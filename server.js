@@ -32,7 +32,10 @@ const ENCRYPTION_SECRET = process.env.ENCRYPTION_SECRET || 'default-secret-32-ch
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 // Add static serving for vendor directory (e.g. for iframe preview dependencies)
-app.use('/vendor', express.static(path.join(__dirname, 'public/vendor')));
+app.use('/vendor', (req, res, next) => {
+  res.setHeader('Cross-Origin-Resource-Policy', 'same-origin');
+  next();
+}, express.static(path.join(__dirname, 'public/vendor')));
 
 // ---------------------------------------------------------------------------
 // Supabase admin client (for auth validation and platform DB operations)
